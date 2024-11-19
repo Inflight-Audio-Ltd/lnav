@@ -875,6 +875,7 @@ com_goto(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
             }
 
             if (!(tm.et_flags & ETF_DAY_SET)) {
+                tm.et_tm.tm_yday = -1;
                 tm.et_tm.tm_mday = 1;
             }
             if (!(tm.et_flags & ETF_HOUR_SET)) {
@@ -1290,7 +1291,7 @@ com_next_section(exec_context& ec,
         }
 
         tc->set_selection(adj_opt.value());
-        if (tc->is_selectable()) {
+        if (tc->is_selectable() && adj_opt.value() >= 2_vl) {
             tc->set_top(adj_opt.value() - 2_vl, false);
         }
     }
@@ -1321,7 +1322,7 @@ com_prev_section(exec_context& ec,
         }
 
         tc->set_selection(adj_opt.value());
-        if (tc->is_selectable()) {
+        if (tc->is_selectable() && adj_opt.value() >= 2_vl) {
             tc->set_top(adj_opt.value() - 2_vl, false);
         }
     }
@@ -2116,10 +2117,11 @@ com_pipe_to(exec_context& ec,
             break;
         }
 
-        default:
+        default: {
             bookmark_vector<vis_line_t>::iterator iter;
             std::string line;
 
+            log_info("spawned pipe child %d -- %s", child_pid, cmd.c_str());
             lnav_data.ld_children.push_back(child_pid);
 
             std::future<std::string> reader;
@@ -2160,7 +2162,7 @@ com_pipe_to(exec_context& ec,
                     log_perror(write(child_fds[0].write_end(), "\n", 1));
                 }
             } else {
-                for (iter = bv.begin(); iter != bv.end(); iter++) {
+                for (iter = bv.begin(); iter != bv.end(); ++iter) {
                     tc->grep_value_for_line(*iter, line);
                     if (write(
                             child_fds[0].write_end(), line.c_str(), line.size())
@@ -2181,6 +2183,7 @@ com_pipe_to(exec_context& ec,
                 retval = "";
             }
             break;
+        }
     }
 
     return Ok(retval);
@@ -5886,7 +5889,7 @@ command_prompt(std::vector<std::string>& args)
         add_filter_expr_possibilities(
             lnav_data.ld_rl_view, ln_mode_t::COMMAND, "filter-expr-syms");
     }
-    lnav_data.ld_mode = ln_mode_t::COMMAND;
+    set_view_mode(ln_mode_t::COMMAND);
     lnav_data.ld_rl_view->focus(ln_mode_t::COMMAND,
                                 cget(args, 2).value_or(":"),
                                 cget(args, 3).value_or(""));
@@ -5900,7 +5903,7 @@ script_prompt(std::vector<std::string>& args)
     textview_curses* tc = *lnav_data.ld_view_stack.top();
     auto& scripts = injector::get<available_scripts&>();
 
-    lnav_data.ld_mode = ln_mode_t::EXEC;
+    set_view_mode(ln_mode_t::EXEC);
 
     lnav_data.ld_exec_context.ec_top_line = tc->get_selection();
     lnav_data.ld_rl_view->clear_possibilities(ln_mode_t::EXEC, "__command");
@@ -5924,7 +5927,7 @@ search_prompt(std::vector<std::string>& args)
 {
     textview_curses* tc = *lnav_data.ld_view_stack.top();
 
-    lnav_data.ld_mode = ln_mode_t::SEARCH;
+    set_view_mode(ln_mode_t::SEARCH);
     lnav_data.ld_search_start_line = tc->get_selection();
     add_view_text_possibilities(
         lnav_data.ld_rl_view, ln_mode_t::SEARCH, "*", tc, text_quoting::regex);
@@ -5943,7 +5946,7 @@ search_prompt(std::vector<std::string>& args)
 static void
 search_filters_prompt(std::vector<std::string>& args)
 {
-    lnav_data.ld_mode = ln_mode_t::SEARCH_FILTERS;
+    set_view_mode(ln_mode_t::SEARCH_FILTERS);
     lnav_data.ld_filter_view.reload_data();
     add_view_text_possibilities(lnav_data.ld_rl_view,
                                 ln_mode_t::SEARCH_FILTERS,
@@ -5964,7 +5967,7 @@ search_files_prompt(std::vector<std::string>& args)
 {
     static const std::regex re_escape(R"(([.\^$*+?()\[\]{}\\|]))");
 
-    lnav_data.ld_mode = ln_mode_t::SEARCH_FILES;
+    set_view_mode(ln_mode_t::SEARCH_FILES);
     for (const auto& lf : lnav_data.ld_active_files.fc_files) {
         auto path = lnav::pcre2pp::quote(lf->get_unique_path().string());
         lnav_data.ld_rl_view->add_possibility(
@@ -5982,7 +5985,7 @@ search_files_prompt(std::vector<std::string>& args)
 static void
 search_spectro_details_prompt(std::vector<std::string>& args)
 {
-    lnav_data.ld_mode = ln_mode_t::SEARCH_SPECTRO_DETAILS;
+    set_view_mode(ln_mode_t::SEARCH_SPECTRO_DETAILS);
     add_view_text_possibilities(lnav_data.ld_rl_view,
                                 ln_mode_t::SEARCH_SPECTRO_DETAILS,
                                 "*",
@@ -6005,7 +6008,7 @@ sql_prompt(std::vector<std::string>& args)
 
     lnav_data.ld_exec_context.ec_top_line = tc->get_selection();
 
-    lnav_data.ld_mode = ln_mode_t::SQL;
+    set_view_mode(ln_mode_t::SQL);
     setup_logline_table(lnav_data.ld_exec_context);
     lnav_data.ld_rl_view->focus(ln_mode_t::SQL,
                                 cget(args, 2).value_or(";"),
@@ -6035,7 +6038,7 @@ user_prompt(std::vector<std::string>& args)
     textview_curses* tc = *lnav_data.ld_view_stack.top();
     lnav_data.ld_exec_context.ec_top_line = tc->get_selection();
 
-    lnav_data.ld_mode = ln_mode_t::USER;
+    set_view_mode(ln_mode_t::USER);
     setup_logline_table(lnav_data.ld_exec_context);
     lnav_data.ld_rl_view->focus(ln_mode_t::USER,
                                 cget(args, 2).value_or("? "),

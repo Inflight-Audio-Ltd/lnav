@@ -1,8 +1,8 @@
 
 include $(top_srcdir)/aminclude_static.am
 
-TESTS_ENVIRONMENT = $(SHELL) $(top_builddir)/TESTS_ENVIRONMENT
-LOG_COMPILER = $(SHELL) $(top_builddir)/TESTS_ENVIRONMENT
+TESTS_ENVIRONMENT = $(BASH) $(top_builddir)/TESTS_ENVIRONMENT
+LOG_COMPILER = $(BASH) $(top_builddir)/TESTS_ENVIRONMENT
 
 RM_V = $(RM_V_@AM_V@)
 RM_V_ = $(RM_V_@AM_DEFAULT_V@)
@@ -336,6 +336,7 @@ dist_noinst_DATA = \
 	logfile_docker_compose.0 \
 	logfile_docker_compose_with_noise.0 \
 	logfile_docker_compose_with_ts.0 \
+	logfile_dst.0 \
 	logfile_empty.0 \
 	logfile_epoch.0 \
 	logfile_epoch.1 \
@@ -356,6 +357,7 @@ dist_noinst_DATA = \
 	logfile_json.json \
 	logfile_json2.json \
 	logfile_json3.json \
+	logfile_json_invalid.json \
 	logfile_json_subsec.json \
 	logfile_leveltest.0 \
 	logfile_logfmt.0 \
@@ -399,6 +401,7 @@ dist_noinst_DATA = \
 	logfile_with_a_really_long_name_to_test_a_bug_with_long_names.0 \
 	logfile_with_zones.0 \
 	logfile_xml_msg.0 \
+	logfile_yday.0 \
 	man_echo.txt \
 	multiline.lnav \
 	mvwattrline_output.0 \
@@ -471,7 +474,10 @@ dist_noinst_DATA = \
     naughty_files.py \
 	remote-log-dir/logfile_access_log.0 \
 	remote-log-dir/logfile_access_log.1 \
+    tui-captures/tui_crumbs.0 \
     tui-captures/tui_echo.0 \
+    tui-captures/tui_filters.0 \
+    tui-captures/tui_filters.1 \
 	tui-captures/tui_help.0
 
 TESTS = \
@@ -499,6 +505,7 @@ TESTS = \
 	test_json_format.sh \
 	test_log_accel \
 	test_logfile.sh \
+    test_regex101.sh \
 	test_reltime \
 	test_scripts.sh \
 	test_sessions.sh \
@@ -528,7 +535,6 @@ TESTS += test_prql.sh
 endif
 
 DISABLED_TESTS = \
-    test_regex101.sh \
 	test_remote.sh \
 	test_top_status \
 	test_line_buffer2 \
@@ -574,6 +580,7 @@ DISTCLEANFILES = \
 	textfile_long_lines.0 \
 	not:a:remote:file \
 	rollover_in.0 \
+	syslog_log.sql \
 	test-logs.tgz \
 	test-logs-trunc.tgz \
 	test_pretty_in.* \
@@ -603,6 +610,7 @@ distclean-local:
 	$(RM_V)rm -rf regex101-home
 	$(RM_V)rm -rf events-home
 	$(RM_V)rm -rf support-dump
+	$(RM_V)rm -rf tui-home
 	$(RM_V)rm -rf ../installer-test-home
 
 expected:

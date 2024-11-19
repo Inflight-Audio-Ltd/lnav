@@ -691,7 +691,6 @@ handle_config_ui_key(int ch, const char* keyseq)
         case ln_mode_t::FILES:
             if (ch == KEY_CTRL(']')) {
                 set_view_mode(ln_mode_t::FILE_DETAILS);
-                lnav_data.ld_mode = ln_mode_t::FILE_DETAILS;
                 retval = true;
             } else {
                 retval = lnav_data.ld_files_view.handle_key(ch);
@@ -739,7 +738,7 @@ handle_config_ui_key(int ch, const char* keyseq)
         {
             lnav_data.ld_last_config_mode = new_mode.value();
         }
-        lnav_data.ld_mode = new_mode.value();
+        set_view_mode(new_mode.value());
         lnav_data.ld_files_view.reload_data();
         lnav_data.ld_file_details_view.reload_data();
         lnav_data.ld_filter_view.reload_data();
@@ -780,7 +779,7 @@ handle_key(int ch, const char* keyseq)
 
                 case ln_mode_t::SPECTRO_DETAILS: {
                     if (ch == '\t' || ch == 'q') {
-                        lnav_data.ld_mode = ln_mode_t::PAGING;
+                        set_view_mode(ln_mode_t::PAGING);
                         return true;
                     }
                     if (lnav_data.ld_spectro_details_view.handle_key(ch)) {
@@ -1191,9 +1190,8 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
 
         errpipe[0].close_on_exec();
         errpipe[1].close_on_exec();
-        dup2(errpipe[1], STDERR_FILENO);
-        errpipe[1].reset();
-        log_pipe_err(errpipe[0]);
+        auto pipe_err_handle
+            = log_pipe_err(errpipe[0].release(), errpipe[1].release());
         lnav_behavior lb;
 
         ui_periodic_timer::singleton();
@@ -1533,7 +1531,7 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
 
         static sig_atomic_t index_counter;
 
-        lnav_data.ld_mode = ln_mode_t::FILES;
+        set_view_mode(ln_mode_t::FILES);
 
         timer.start_fade(index_counter, 1);
 
@@ -1734,6 +1732,14 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                         case ln_mode_t::USER:
                             if (rlc->consume_ready_for_input()) {
                                 // log_debug("waiting for readline input")
+                                view_curses::awaiting_user_input();
+                            }
+                            break;
+                        case ln_mode_t::FILTER:
+                            if (!filter_source->fss_editing
+                                || filter_source->fss_editor
+                                       ->consume_ready_for_input())
+                            {
                                 view_curses::awaiting_user_input();
                             }
                             break;
@@ -1992,7 +1998,7 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                                 ->empty())
                         {
                             log_info("switching to paging!");
-                            lnav_data.ld_mode = ln_mode_t::PAGING;
+                            set_view_mode(ln_mode_t::PAGING);
                             lnav_data.ld_active_files.fc_files
                                 | lnav::itertools::for_each(
                                     &logfile::dump_stats);
@@ -2025,6 +2031,17 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                         continue;
                     }
 
+                    if (WIFEXITED(child_stat)) {
+                        log_info("child %d exited with status %d",
+                                 *iter,
+                                 WEXITSTATUS(child_stat));
+                    } else if (WTERMSIG(child_stat)) {
+                        log_error("child %d terminated with signal %d",
+                                  *iter,
+                                  WTERMSIG(child_stat));
+                    } else {
+                        log_info("child %d exited");
+                    }
                     iter = lnav_data.ld_children.erase(iter);
                 }
 
@@ -2101,6 +2118,31 @@ wait_for_children()
     std::vector<struct pollfd> pollfds;
     struct timeval to = {0, 333000};
     static auto* ps = injector::get<pollable_supervisor*>();
+
+    for (auto iter = lnav_data.ld_children.begin();
+         iter != lnav_data.ld_children.end();
+         ++iter)
+    {
+        int rc, child_stat;
+
+        rc = waitpid(*iter, &child_stat, WNOHANG);
+        if (rc == -1 || rc == 0) {
+            continue;
+        }
+
+        if (WIFEXITED(child_stat)) {
+            log_info("child %d exited with status %d",
+                     *iter,
+                     WEXITSTATUS(child_stat));
+        } else if (WTERMSIG(child_stat)) {
+            log_error("child %d terminated with signal %d",
+                      *iter,
+                      WTERMSIG(child_stat));
+        } else {
+            log_info("child %d exited");
+        }
+        iter = lnav_data.ld_children.erase(iter);
+    }
 
     do {
         pollfds.clear();
@@ -3022,7 +3064,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
     init_lnav_commands(lnav_commands);
 
     lnav_data.ld_looping = true;
-    lnav_data.ld_mode = ln_mode_t::PAGING;
+    set_view_mode(ln_mode_t::PAGING);
 
     if ((isatty(STDIN_FILENO) || is_dev_null(STDIN_FILENO)) && file_args.empty()
         && lnav_data.ld_active_files.fc_file_names.empty()
@@ -3604,9 +3646,13 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                 fprintf(stderr, "error: %s\n", e.what());
             }
         } catch (const line_buffer::error& e) {
-            fprintf(stderr, "error: %s\n", strerror(e.e_err));
+            auto um = lnav::console::user_message::error("internal error")
+                          .with_reason(strerror(e.e_err));
+            lnav::console::print(stderr, um);
         } catch (const std::exception& e) {
-            fprintf(stderr, "error: %s\n", e.what());
+            auto um = lnav::console::user_message::error("internal error")
+                          .with_reason(e.what());
+            lnav::console::print(stderr, um);
         }
 
         // When reading from stdin, tell the user where the capture

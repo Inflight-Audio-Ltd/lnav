@@ -1529,9 +1529,6 @@ logfile_sub_source::insert_file(const std::shared_ptr<logfile>& lf)
 Result<void, lnav::console::user_message>
 logfile_sub_source::set_sql_filter(std::string stmt_str, sqlite3_stmt* stmt)
 {
-    for (auto& filt : this->tss_filters) {
-        log_debug("set filt %p %d", filt.get(), filt->lf_deleted);
-    }
     if (stmt != nullptr && !this->lss_filtered_index.empty()) {
         auto top_cl = this->at(0_vl);
         auto ld = this->find_data(top_cl);
@@ -1553,7 +1550,6 @@ logfile_sub_source::set_sql_filter(std::string stmt_str, sqlite3_stmt* stmt)
         auto new_filter
             = std::make_shared<sql_filter>(*this, std::move(stmt_str), stmt);
 
-        log_debug("fstack %p new %p", &this->tss_filters, new_filter.get());
         if (old_filter) {
             auto existing_iter = std::find(this->tss_filters.begin(),
                                            this->tss_filters.end(),
@@ -1603,7 +1599,14 @@ logfile_sub_source::set_sql_marker(std::string stmt_str, sqlite3_stmt* stmt)
     {
         auto cl = this->at(row);
         auto ld = this->find_data(cl);
+
+        if (!(*ld)->is_visible()) {
+            continue;
+        }
         auto ll = (*ld)->get_file()->begin() + cl;
+        if (ll->is_continued() || ll->is_ignored()) {
+            continue;
+        }
         auto eval_res
             = this->eval_sql_filter(this->lss_marker_stmt.in(), ld, ll);
 
@@ -2663,7 +2666,6 @@ logfile_sub_source::text_crumbs_for_line(int line,
     if (sbr.get_metadata().m_has_ansi) {
         // bleh
         scrub_ansi_string(al.get_string(), &al.al_attrs);
-        sbr.erase_ansi();
     }
     format->annotate(lf.get(), file_line_number, al.get_attrs(), values);
 
@@ -2701,7 +2703,7 @@ logfile_sub_source::text_crumbs_for_line(int line,
             });
     }
 
-    auto sf = sbr.to_string_fragment();
+    auto sf = string_fragment::from_str(al.get_string());
     auto body_opt = get_string_attr(al.get_attrs(), SA_BODY);
     auto nl_pos_opt = sf.find('\n');
     auto msg_line_number = std::distance(msg_start_iter, line_pair.second);
@@ -2747,7 +2749,7 @@ logfile_sub_source::text_crumbs_for_line(int line,
                 auto curr_node = lnav::document::hier_node::lookup_path(
                     meta->m_sections_root.get(), path);
 
-                crumbs.template emplace_back(
+                crumbs.emplace_back(
                     iv.value,
                     [meta, path]() { return meta->possibility_provider(path); },
                     [this, curr_node, path, line_from_top](const auto& key) {
@@ -2758,7 +2760,7 @@ logfile_sub_source::text_crumbs_for_line(int line,
                         if (parent_node == nullptr) {
                             return;
                         }
-                        key.template match(
+                        key.match(
                             [parent_node](const std::string& str) {
                                 return parent_node->find_line_number(str);
                             },
@@ -2797,14 +2799,14 @@ logfile_sub_source::text_crumbs_for_line(int line,
             auto poss_provider = [curr_node = node.value()]() {
                 std::vector<breadcrumb::possibility> retval;
                 for (const auto& child : curr_node->hn_named_children) {
-                    retval.template emplace_back(child.first);
+                    retval.emplace_back(child.first);
                 }
                 return retval;
             };
             auto path_performer
                 = [this, curr_node = node.value(), line_from_top](
                       const breadcrumb::crumb::key_t& value) {
-                      value.template match(
+                      value.match(
                           [curr_node](const std::string& str) {
                               return curr_node->find_line_number(str);
                           },

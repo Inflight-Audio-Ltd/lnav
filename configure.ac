@@ -50,6 +50,7 @@ AM_PROG_AR
 AC_PROG_LN_S
 AC_PROG_MAKE_SET
 
+AC_PATH_PROG(BASH, [bash])
 AC_PATH_PROG(CARGO_CMD, [cargo])
 AC_PATH_PROG(BZIP2_CMD, [bzip2])
 AC_PATH_PROG(RE2C_CMD, [re2c])
@@ -60,6 +61,12 @@ AC_PATH_PROG(CHECK_JSONSCHEMA, [check-jsonschema])
 
 AC_CHECK_SIZEOF(off_t)
 AC_CHECK_SIZEOF(size_t)
+
+AC_CHECK_FUNC(mkostemp,
+    AC_DEFINE([HAVE_MKOSTEMP], [1],
+        [Have the mkostemp() function]
+    )
+)
 
 AC_STRUCT_TIMEZONE
 

@@ -54,6 +54,7 @@
 #include <algorithm>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -652,15 +653,34 @@ log_abort()
     _exit(1);
 }
 
-void
-log_pipe_err(int fd)
+log_pipe_err_handle::
+log_pipe_err_handle(log_pipe_err_handle&& other) noexcept
 {
-    std::thread reader([fd]() {
+    this->h_old_stderr_fd = std::exchange(other.h_old_stderr_fd, -1);
+}
+
+log_pipe_err_handle::~
+log_pipe_err_handle()
+{
+    if (this->h_old_stderr_fd != -1) {
+        dup2(std::exchange(this->h_old_stderr_fd, -1), STDERR_FILENO);
+    }
+}
+
+log_pipe_err_handle
+log_pipe_err(int readfd, int writefd)
+{
+    fflush(stderr);
+
+    auto retval = log_pipe_err_handle(dup(STDERR_FILENO));
+    dup2(writefd, STDERR_FILENO);
+
+    std::thread reader([readfd]() {
         char buffer[1024];
         bool done = false;
 
         while (!done) {
-            int rc = read(fd, buffer, sizeof(buffer));
+            int rc = read(readfd, buffer, sizeof(buffer));
 
             switch (rc) {
                 case -1:
@@ -677,10 +697,11 @@ log_pipe_err(int fd)
             }
         }
 
-        close(fd);
+        close(readfd);
     });
 
     reader.detach();
+    return retval;
 }
 
 log_state_dumper::

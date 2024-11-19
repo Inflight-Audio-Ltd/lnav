@@ -39,6 +39,8 @@
 #include "ptimec.hh"
 
 static const char* GOOD_TIMES[] = {
+    "2023-001T00:59:36.208491Z",
+    "2023-200T00:59:36.208491Z",
     "2023-08-11T00:59:36.208491Z",
     "09/Aug/2023:21:41:44 +0000",
     "2022-08-27T17:22:01.694554+03:00",
@@ -256,5 +258,23 @@ TEST_CASE("date_time_scanner")
         char buf[32];
         ftime_fmt(buf, sizeof(buf), "ts %q ]", tm);
         assert(strcmp(buf, epoch_str) == 0);
+    }
+
+    {
+        auto ts = "Jan  1 12:00:00";
+        const char* fmt[] = {
+            "%b %e %H:%M:%S",
+            nullptr,
+        };
+        char buf[64];
+        date_time_scanner dts;
+        struct exttm tm;
+        struct timeval tv;
+
+        const auto* ts_end = dts.scan(ts, strlen(ts), fmt, &tm, tv);
+        assert(ts_end - ts == 15);
+        auto rc = dts.ftime(buf, sizeof(buf), fmt, tm);
+        assert(rc == 15);
+        assert(strcmp(ts, buf) == 0);
     }
 }

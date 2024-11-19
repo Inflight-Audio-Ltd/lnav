@@ -249,6 +249,20 @@
                     },
                     "additionalProperties": false
                 },
+                "textfile": {
+                    "description": "Settings related to text file handling",
+                    "title": "/tuning/textfile",
+                    "type": "object",
+                    "properties": {
+                        "max-unformatted-line-length": {
+                            "title": "/tuning/textfile/max-unformatted-line-length",
+                            "description": "The maximum allowed length for a line in a text file before formatting is automatically applied",
+                            "type": "integer",
+                            "minimum": 0
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "url-scheme": {
                     "description": "Settings related to custom URL handling",
                     "title": "/tuning/url-scheme",
@@ -326,6 +340,19 @@
                                             "title": "/ui/theme-defs/<theme_name>/vars/<var_name>",
                                             "description": "A theme variable definition",
                                             "type": "string"
+                                        }
+                                    },
+                                    "additionalProperties": false
+                                },
+                                "icons": {
+                                    "description": "Icons for UI elements.",
+                                    "title": "/ui/theme-defs/<theme_name>/icons",
+                                    "type": "object",
+                                    "properties": {
+                                        "hidden": {
+                                            "description": "Icon for hidden fields",
+                                            "title": "/ui/theme-defs/<theme_name>/icons/hidden",
+                                            "$ref": "#/definitions/icon"
                                         }
                                     },
                                     "additionalProperties": false
@@ -1011,6 +1038,19 @@
                     "examples": [
                         "pbpaste"
                     ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "icon": {
+            "title": "icon",
+            "type": "object",
+            "$$target": "#/definitions/icon",
+            "properties": {
+                "value": {
+                    "title": "/value",
+                    "description": "The icon.",
+                    "type": "string"
                 }
             },
             "additionalProperties": false

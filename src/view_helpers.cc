@@ -81,6 +81,26 @@ const char* lnav_view_titles[LNV__MAX] = {
     "TIMELINE",
 };
 
+const char* lnav_mode_strings[lnav::enums::to_underlying(ln_mode_t::BUSY) + 1]
+    = {
+        "PAGING",
+        "BREADCRUMBS",
+        "FILTER",
+        "FILES",
+        "FILE_DETAILS",
+        "SPECTRO_DETAILS",
+        "SEARCH_SPECTRO_DETAILS",
+        "COMMAND",
+        "SEARCH",
+        "SEARCH_FILTERS",
+        "SEARCH_FILES",
+        "CAPTURE",
+        "SQL",
+        "EXEC",
+        "USER",
+        "BUSY",
+};
+
 std::optional<lnav_view_t>
 view_from_string(const char* name)
 {
@@ -105,7 +125,7 @@ view_from_string(const char* name)
 static void
 open_schema_view()
 {
-    textview_curses* schema_tc = &lnav_data.ld_views[LNV_SCHEMA];
+    auto* schema_tc = &lnav_data.ld_views[LNV_SCHEMA];
     std::string schema;
 
     dump_sqlite_schema(lnav_data.ld_db, schema);
@@ -120,8 +140,9 @@ open_schema_view()
 
     delete schema_tc->get_sub_source();
 
-    auto* pts = new plain_text_source(schema);
-    pts->set_text_format(text_format_t::TF_SQL);
+    auto* pts = new plain_text_source();
+    auto schema_al = attr_line_t(schema);
+    pts->replace_with_mutable(schema_al, text_format_t::TF_SQL);
 
     schema_tc->set_sub_source(pts);
     schema_tc->redo_search();
@@ -164,7 +185,7 @@ public:
         const auto initial_size = crumbs.size();
         lnav::document::hier_node* root_node{nullptr};
 
-        this->pss_hier_tree->template visit_overlapping(
+        this->pss_hier_tree->visit_overlapping(
             tl.tl_offset,
             [&root_node](const auto& hier_iv) { root_node = hier_iv.value; });
         this->pss_interval_tree->visit_overlapping(
@@ -185,7 +206,7 @@ public:
                             for (const auto& sibling :
                                  parent_node->hn_named_children)
                             {
-                                retval.template emplace_back(sibling.first);
+                                retval.emplace_back(sibling.first);
                             }
                         }
                     }
@@ -204,7 +225,7 @@ public:
                         if (parent_node == nullptr) {
                             return;
                         }
-                        value.template match(
+                        value.match(
                             [this, parent_node](const std::string& str) {
                                 auto sib_iter
                                     = parent_node->hn_named_children.find(str);
@@ -231,9 +252,9 @@ public:
                                     };
                             });
                     };
-                crumbs.template emplace_back(iv.value,
-                                             std::move(poss_provider),
-                                             std::move(path_performer));
+                crumbs.emplace_back(iv.value,
+                                    std::move(poss_provider),
+                                    std::move(path_performer));
                 auto curr_node
                     = lnav::document::hier_node::lookup_path(root_node, path);
                 if (curr_node
@@ -265,13 +286,13 @@ public:
             auto poss_provider = [curr_node = node.value()]() {
                 std::vector<breadcrumb::possibility> retval;
                 for (const auto& child : curr_node->hn_named_children) {
-                    retval.template emplace_back(child.first);
+                    retval.emplace_back(child.first);
                 }
                 return retval;
             };
             auto path_performer = [this, curr_node = node.value()](
                                       const breadcrumb::crumb::key_t& value) {
-                value.template match(
+                value.match(
                     [this, curr_node](const std::string& str) {
                         auto child_iter
                             = curr_node->hn_named_children.find(str);
@@ -1484,6 +1505,9 @@ set_view_mode(ln_mode_t mode)
         default:
             break;
     }
+    log_info("changing mode from %s to %s",
+             lnav_mode_strings[lnav::enums::to_underlying(lnav_data.ld_mode)],
+             lnav_mode_strings[lnav::enums::to_underlying(mode)]);
     lnav_data.ld_mode = mode;
 }
 

@@ -22,7 +22,7 @@
  * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
  * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
  * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, 'OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
@@ -221,7 +221,7 @@ view_curses::contains(int x, int y) const
 void
 view_curses::awaiting_user_input()
 {
-    static const bool enabled = getenv("lnav_test") != nullptr;
+    static const bool enabled = getenv("IN_SCRIPTY") != nullptr;
     static const char OSC_INPUT[] = "\x1b]999;send-input\a";
 
     if (enabled) {
@@ -249,6 +249,17 @@ view_curses::mvwattrline(WINDOW* window,
     std::string expanded_line;
     line_range lr_bytes;
     int char_index = 0;
+
+    {
+        int rows, cols;
+        getmaxyx(window, rows, cols);
+
+        if (y < 0 || y >= rows || x < 0 || x >= cols) {
+            line_width_chars = 0;
+        } else if ((x + line_width_chars) > cols) {
+            line_width_chars = cols - x;
+        }
+    }
 
     for (size_t lpc = 0; lpc < line.size();) {
         int exp_start_index = expanded_line.size();
@@ -380,7 +391,10 @@ view_curses::mvwattrline(WINDOW* window,
     memset(fg_color, -1, sizeof(fg_color));
     memset(bg_color, -1, sizeof(bg_color));
 
-    mvwin_wchnstr(window, y, x, row_ch, line_width_chars);
+    if (line_width_chars > 0) {
+        auto curses_rc = mvwin_wchnstr(window, y, x, row_ch, line_width_chars);
+        require(curses_rc == OK);
+    }
     std::stable_sort(sa.begin(), sa.end());
     for (auto iter = sa.cbegin(); iter != sa.cend(); ++iter) {
         auto attr_range = iter->sa_range;
@@ -392,7 +406,7 @@ view_curses::mvwattrline(WINDOW* window,
               || iter->sa_type == &VC_STYLE || iter->sa_type == &VC_GRAPHIC
               || iter->sa_type == &SA_LEVEL || iter->sa_type == &VC_FOREGROUND
               || iter->sa_type == &VC_BACKGROUND
-              || iter->sa_type == &VC_BLOCK_ELEM))
+              || iter->sa_type == &VC_BLOCK_ELEM || iter->sa_type == &VC_ICON))
         {
             continue;
         }
@@ -466,6 +480,12 @@ view_curses::mvwattrline(WINDOW* window,
                 attrs = text_attrs{};
             } else if (iter->sa_type == &VC_BLOCK_ELEM) {
                 auto be = iter->sa_value.get<block_elem_t>();
+                block_elem = be.value;
+                attrs = vc.attrs_for_role(be.role);
+            } else if (iter->sa_type == &VC_ICON) {
+                auto ic = iter->sa_value.get<ui_icon_t>();
+                auto be = vc.wchar_for_icon(ic);
+
                 block_elem = be.value;
                 attrs = vc.attrs_for_role(be.role);
             } else if (iter->sa_type == &VC_STYLE) {
@@ -548,11 +568,17 @@ view_curses::mvwattrline(WINDOW* window,
 #else
         auto cur_pair = PAIR_NUMBER(row_ch[lpc].attr);
 #endif
+        if (cur_pair < 0 || cur_pair >= COLOR_PAIRS) {
+            cur_pair = 1;  // XXX ncurses is a giant pile of dogshit
+        }
         short cur_fg, cur_bg;
         pair_content(cur_pair, &cur_fg, &cur_bg);
 
+        require_ge(cur_fg, -100);
+
         auto desired_fg = fg_color[lpc] != -1 ? fg_color[lpc] : cur_fg;
         auto desired_bg = bg_color[lpc] != -1 ? bg_color[lpc] : cur_bg;
+        require_ge(desired_fg, -100);
         if (desired_fg >= COLOR_BLACK && desired_fg <= COLOR_WHITE) {
             desired_fg = vc.ansi_to_theme_color(desired_fg);
         }
@@ -612,6 +638,7 @@ view_curses::mvwattrline(WINDOW* window,
             bg_color[lpc] = cur_bg;
         }
 
+        require_ge(fg_color[lpc], -100);
         int color_pair = vc.ensure_color_pair(fg_color[lpc], bg_color[lpc]);
 
         row_ch[lpc].attr = row_ch[lpc].attr & ~A_COLOR;
@@ -653,6 +680,12 @@ view_colors()
     }
 }
 
+block_elem_t
+view_colors::wchar_for_icon(ui_icon_t ic) const
+{
+    return this->vc_icons[lnav::enums::to_underlying(ic)];
+}
+
 bool view_colors::initialized = false;
 
 static const std::string COLOR_NAMES[] = {
@@ -682,7 +715,8 @@ public:
             vc.init_roles(pair.second, reporter);
         }
 
-        auto iter = lnav_config.lc_ui_theme_defs.find(lnav_config.lc_ui_theme);
+        const auto iter
+            = lnav_config.lc_ui_theme_defs.find(lnav_config.lc_ui_theme);
 
         if (iter == lnav_config.lc_ui_theme_defs.end()) {
             auto theme_names
@@ -720,17 +754,24 @@ view_colors::init(bool headless)
 {
     vc_active_palette = ansi_colors();
     if (!headless && has_colors()) {
-        start_color();
+        log_info("calling start_color()");
+        if (start_color() == ERR) {
+            log_error("start_color() failed");
+        }
 
         if (lnav_config.lc_ui_default_colors) {
             use_default_colors();
         }
         if (COLORS >= 256) {
+            log_info("using xterm palette");
             vc_active_palette = xterm_colors();
         }
-    }
+        log_info("COLOR_PAIRS = %d", COLOR_PAIRS);
 
-    log_debug("COLOR_PAIRS = %d", COLOR_PAIRS);
+        if (COLOR_PAIRS == 0) {
+            throw std::runtime_error("ncurses COLOR_PAIRS is zero");
+        }
+    }
 
     initialized = true;
 
@@ -851,6 +892,23 @@ view_colors::init_roles(const lnav_theme& lt,
     const auto& default_theme = lnav_config.lc_ui_theme_defs["default"];
     rgb_color fg, bg;
     std::string err;
+
+    {
+        size_t index = 0;
+        if (lt.lt_icon_hidden.pp_value.ic_value) {
+            auto read_res = ww898::utf::utf8::read([&lt, &index]() {
+                return lt.lt_icon_hidden.pp_value.ic_value.value()[index++];
+            });
+            if (read_res.isErr()) {
+                reporter(&lt.lt_icon_hidden,
+                         lnav::console::user_message::error("bad"));
+            } else if (read_res.unwrap() != 0) {
+                this->vc_icons[lnav::enums::to_underlying(ui_icon_t::hidden)]
+                    = block_elem_t{(wchar_t) read_res.unwrap(),
+                                   role_t::VCR_HIDDEN};
+            }
+        }
+    }
 
     /* Setup the mappings from roles to actual colors. */
     this->get_role_attrs(role_t::VCR_TEXT)
@@ -1227,8 +1285,8 @@ view_colors::init_roles(const lnav_theme& lt,
 int
 view_colors::ensure_color_pair(short fg, short bg)
 {
-    require(fg >= -100);
-    require(bg >= -100);
+    require_ge(fg, -100);
+    require_ge(bg, -100);
 
     if (fg >= COLOR_BLACK && fg <= COLOR_WHITE) {
         fg = this->ansi_to_theme_color(fg);
@@ -1354,7 +1412,9 @@ screen_curses::create()
         }
     }
 
-    newterm(nullptr, stdout, stdin);
+    if (newterm(nullptr, stdout, stdin) == nullptr) {
+        return Err(std::string("ncurses function newterm() failed"));
+    }
 
     auto& mouse_i = injector::get<xterm_mouse&>();
     mouse_i.set_enabled(check_experimental("mouse")

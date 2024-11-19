@@ -116,6 +116,9 @@ static auto annoc = injector::bind<lnav::log::annotate::config>::to_instance(
 static auto tssc = injector::bind<top_status_source_cfg>::to_instance(
     +[]() { return &lnav_config.lc_top_status_cfg; });
 
+static auto ltc = injector::bind<lnav::textfile::config>::to_instance(
+    +[]() { return &lnav_config.lc_textfile; });
+
 bool
 check_experimental(const char* feature_name)
 {
@@ -365,7 +368,7 @@ install_from_git(const std::string& repo)
     rename(local_staging_path.c_str(), dest_path.c_str());
     auto um = lnav::console::user_message::ok(
                   attr_line_t("installed lnav repo at: ")
-                      .append(lnav::roles::file(local_configs_path.string())))
+                      .append(lnav::roles::file(dest_path.string())))
                   .with_note(notes)
                   .move();
     lnav::console::print(stdout, um);
@@ -645,6 +648,20 @@ static const struct json_path_container style_config_handlers =
             .for_field(&style_config::sc_bold),
     }
         .with_definition_id("style");
+
+static const auto icon_config_handlers
+    = json_path_container{
+        yajlpp::property_handler("value")
+            .with_description("The icon.")
+            .for_field(&icon_config::ic_value),
+    }.with_definition_id("icon");
+
+static const json_path_container theme_icons_handlers = {
+    yajlpp::property_handler("hidden")
+        .with_description("Icon for hidden fields")
+        .for_child(&lnav_theme::lt_icon_hidden)
+        .with_children(icon_config_handlers),
+};
 
 static const struct json_path_container theme_styles_handlers = {
     yajlpp::property_handler("identifier")
@@ -1097,6 +1114,10 @@ static const struct json_path_container theme_def_handlers = {
         .with_description("Variables definitions that are used in this theme.")
         .with_children(theme_vars_handlers),
 
+    yajlpp::property_handler("icons")
+        .with_description("Icons for UI elements.")
+        .with_children(theme_icons_handlers),
+
     yajlpp::property_handler("styles")
         .with_description("Styles for log messages.")
         .with_children(theme_styles_handlers),
@@ -1261,6 +1282,16 @@ static const struct json_path_container file_vtab_handlers = {
         .with_min_value(0)
         .for_field(&_lnav_config::lc_file_vtab,
                    &file_vtab::config::fvc_max_content_size),
+};
+
+static const struct json_path_container textfile_handlers = {
+    yajlpp::property_handler("max-unformatted-line-length")
+        .with_synopsis("<bytes>")
+        .with_description("The maximum allowed length for a line in a text "
+                          "file before formatting is automatically applied")
+        .with_min_value(0)
+        .for_field(&_lnav_config::lc_textfile,
+                   &lnav::textfile::config::c_max_unformatted_line_length),
 };
 
 static const struct json_path_container logfile_handlers = {
@@ -1580,6 +1611,9 @@ static const struct json_path_container tuning_handlers = {
     yajlpp::property_handler("external-opener")
         .with_description("Settings related to opening external files/URLs")
         .with_children(opener_handlers),
+    yajlpp::property_handler("textfile")
+        .with_description("Settings related to text file handling")
+        .with_children(textfile_handlers),
     yajlpp::property_handler("url-scheme")
         .with_description("Settings related to custom URL handling")
         .with_children(url_handlers),
@@ -1890,6 +1924,8 @@ load_config(const std::vector<std::filesystem::path>& extra_paths,
             auto config_path = extra_path / "configs/*/*.json";
             static_root_mem<glob_t, globfree> gl;
 
+            log_info("loading configuration files in configs directories: %s",
+                     config_path.c_str());
             if (glob(config_path.c_str(), 0, nullptr, gl.inout()) == 0) {
                 for (size_t lpc = 0; lpc < gl->gl_pathc; lpc++) {
                     load_config_from(lnav_config, gl->gl_pathv[lpc], errors);

@@ -119,6 +119,7 @@ date_time_scanner::scan(const char* time_dest,
     this->dts_zoned_to_local = cfg.c_zoned_to_local;
     while (next_format(time_fmt, curr_time_fmt, this->dts_fmt_lock)) {
         *tm_out = this->dts_base_tm;
+        tm_out->et_tm.tm_yday = -1;
         tm_out->et_flags = 0;
         if (time_len > 1 && time_dest[0] == '+' && isdigit(time_dest[1])) {
             retval = nullptr;
@@ -176,13 +177,22 @@ date_time_scanner::scan(const char* time_dest,
                         && !(tm_out->et_flags & ETF_EPOCH_TIME)
                         && this->dts_default_zone != nullptr)
                     {
-                        date::local_seconds stime;
-                        stime += std::chrono::seconds{gmt};
-                        auto ztime
-                            = date::make_zoned(this->dts_default_zone, stime);
-                        gmt = std::chrono::duration_cast<std::chrono::seconds>(
-                                  ztime.get_sys_time().time_since_epoch())
-                                  .count();
+                        try {
+                            date::local_seconds stime;
+                            stime += std::chrono::seconds{gmt};
+                            auto ztime
+                                = date::make_zoned(this->dts_default_zone,
+                                                   stime,
+                                                   date::choose::earliest);
+                            gmt = std::chrono::duration_cast<
+                                      std::chrono::seconds>(
+                                      ztime.get_sys_time().time_since_epoch())
+                                      .count();
+                        } catch (const std::exception& e) {
+                            log_error("failed to convert time %d -- %s",
+                                      gmt,
+                                      e.what());
+                        }
                     }
                     this->to_localtime(gmt, *tm_out);
                 }

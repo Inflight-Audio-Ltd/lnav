@@ -201,12 +201,15 @@ EOF
     run_test env TMPDIR=logfile-tmp ${lnav_test} -n \
         test-logs-trunc.tgz
 
-    sed -e "s|${builddir}||g" `test_err_filename` | head -2 \
+    sed -e "s|${builddir}||g" \
+        -e 's/truncated gzip input/truncated/g' \
+        -e 's/Truncated tar archive detected while reading data/truncated/g' \
+        `test_err_filename` | head -2 \
         > test_logfile.trunc.out
     mv test_logfile.trunc.out `test_err_filename`
     check_error_output "truncated tgz not reported correctly" <<EOF
 ✘ error: unable to open file: /test-logs-trunc.tgz
- reason: failed to extract 'src/lnav' from archive '/test-logs-trunc.tgz' -- truncated gzip input
+ reason: failed to extract 'src/lnav' from archive '/test-logs-trunc.tgz' -- truncated
 EOF
 
     mkdir -p rotmp
@@ -738,3 +741,13 @@ run_cap_test ${lnav_test} -n \
 run_cap_test ${lnav_test} -n \
     -c ':set-file-timezone bad' \
     ${test_dir}/logfile_syslog.0
+
+run_cap_test ${lnav_test} -n \
+    -c ';SELECT log_time FROM all_logs' \
+    ${test_dir}/logfile_yday.0
+
+touch -t 202411030000 ${test_dir}/logfile_dst.0
+
+run_cap_test env TZ=America/Los_Angeles ${lnav_test} -n \
+    -c ':set-file-timezone America/Los_Angeles' \
+    ${test_dir}/logfile_dst.0

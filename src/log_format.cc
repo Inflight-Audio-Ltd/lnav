@@ -810,6 +810,7 @@ log_format::check_for_new_year(std::vector<logline>& dst,
         struct tm otm;
 
         gmtime_r(&ot, &otm);
+        otm.tm_yday = -1;
         if (otm.tm_year < off_year) {
             otm.tm_year = 0;
         } else {
@@ -1523,7 +1524,7 @@ external_log_format::scan(logfile& lf,
             opid = opid_cap->hash();
         }
 
-        if (mod_cap) {
+        if (mod_cap && body_cap) {
             intern_string_t mod_name = intern_string::lookup(mod_cap.value());
             auto mod_iter = MODULE_FORMATS.find(mod_name);
 
@@ -1539,7 +1540,7 @@ external_log_format::scan(logfile& lf,
                     mod_iter->second.mf_mod_format);
 
                 if (mod_elf) {
-                    static thread_local auto mod_md
+                    thread_local auto mod_md
                         = lnav::pcre2pp::match_data::unitialized();
 
                     shared_buffer_ref body_ref;

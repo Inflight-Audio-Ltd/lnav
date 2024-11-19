@@ -649,8 +649,7 @@ file_collection::expand_filename(
     }
 
     auto filename_key = loo.loo_filename.empty() ? path : loo.loo_filename;
-    auto glob_flags = lnav::filesystem::is_glob(path) ? GLOB_NOCHECK : 0;
-    auto glob_rc = glob(path.c_str(), glob_flags, nullptr, gl.inout());
+    auto glob_rc = glob(path.c_str(), GLOB_NOCHECK, nullptr, gl.inout());
     if (glob_rc == 0) {
         if (gl->gl_pathc == 1 /*&& gl.gl_matchc == 0*/) {
             /* It's a pattern that doesn't match any files
@@ -694,7 +693,7 @@ file_collection::expand_filename(
             required = false;
         }
 
-        std::lock_guard<std::mutex> lg(REALPATH_CACHE_MUTEX);
+        std::lock_guard lg(REALPATH_CACHE_MUTEX);
         for (size_t lpc = 0; lpc < gl->gl_pathc; lpc++) {
             auto path_str = std::string(gl->gl_pathv[lpc]);
             auto iter = REALPATH_CACHE.find(path_str);
@@ -711,10 +710,7 @@ file_collection::expand_filename(
                                 "Cannot find file: %s -- %s",
                                 gl->gl_pathv[lpc],
                                 errmsg);
-                    } else if (loo.loo_source != logfile_name_source::REMOTE) {
-                        // XXX The remote code path adds the file name before
-                        // the file exists...  not sure checking for that here
-                        // is a good idea (prolly not)
+                    } else if (loo.loo_filename.empty()) {
                         file_collection retval;
 
                         if (gl->gl_pathc == 1) {
@@ -722,8 +718,9 @@ file_collection::expand_filename(
                                     filename_key)
                                 == 0)
                             {
-                                log_error("failed to find path: %s -- %s",
+                                log_error("failed to find path: %s (%s) -- %s",
                                           filename_key.c_str(),
+                                          gl->gl_pathv[lpc],
                                           errmsg);
                                 retval.fc_name_to_errors->writeAccess()
                                     ->emplace(filename_key,
