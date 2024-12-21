@@ -30,6 +30,7 @@
 #include "view_helpers.hh"
 
 #include "base/itertools.hh"
+#include "base/itertools.enumerate.hh"
 #include "bound_tags.hh"
 #include "config.h"
 #include "document.sections.hh"
@@ -539,7 +540,8 @@ build_all_help_text()
         return;
     }
 
-    shlex lexer(help_md.to_string_fragment());
+    auto help_md_str = help_md.to_string_fragment_producer()->to_string();
+    shlex lexer(help_md_str);
     std::string sub_help_text;
 
     lexer.with_ignore_quotes(true).eval(
@@ -609,7 +611,7 @@ build_all_help_text()
 }
 
 bool
-handle_winch()
+handle_winch(screen_curses* sc)
 {
     static auto* filter_source = injector::get<filter_sub_source*>();
 
@@ -617,20 +619,20 @@ handle_winch()
         return false;
     }
 
-    struct winsize size;
+    if (sc) {
+        notcurses_refresh(sc->get_notcurses(), nullptr, nullptr);
+        notcurses_render(sc->get_notcurses());
+        notcurses_refresh(sc->get_notcurses(), nullptr, nullptr);
+    }
 
     lnav_data.ld_winched = false;
-
-    if (ioctl(fileno(stdout), TIOCGWINSZ, &size) == 0) {
-        resizeterm(size.ws_row, size.ws_col);
-    }
     if (lnav_data.ld_rl_view != nullptr) {
         lnav_data.ld_rl_view->do_update();
         lnav_data.ld_rl_view->window_change();
     }
     filter_source->fss_editor->window_change();
-    for (auto& sc : lnav_data.ld_status) {
-        sc.window_change();
+    for (auto& stat : lnav_data.ld_status) {
+        stat.window_change();
     }
     lnav_data.ld_view_stack.set_needs_update();
     lnav_data.ld_doc_view.set_needs_update();
@@ -649,12 +651,13 @@ handle_winch()
 void
 layout_views()
 {
-    static constexpr auto FILES_FOCUSED_WIDTH = 40;
-    static constexpr auto FILES_BLURRED_WIDTH = 20;
+    static constexpr auto FILES_FOCUSED_WIDTH = 40U;
+    static constexpr auto FILES_BLURRED_WIDTH = 20U;
 
     static auto* breadcrumb_view = injector::get<breadcrumb_curses*>();
-    int width, height;
-    getmaxyx(lnav_data.ld_window, height, width);
+
+    unsigned int width, height;
+    ncplane_dim_yx(lnav_data.ld_window, &height, &width);
 
     int doc_height;
     bool doc_side_by_side = width > (90 + 60);
@@ -707,7 +710,7 @@ layout_views()
     }
 
     int match_rows = lnav_data.ld_match_source.text_line_count();
-    int match_height = std::min(match_rows, (height - 4) / 2);
+    int match_height = std::min(match_rows, (int) (height - 4) / 2);
     lnav_data.ld_match_view.set_height(vis_line_t(match_height));
 
     int um_rows = lnav_data.ld_user_message_source.text_line_count();
@@ -718,7 +721,7 @@ layout_views()
         lnav_data.ld_user_message_source.clear();
         um_rows = 0;
     }
-    auto um_height = std::min(um_rows, (height - 4) / 2);
+    auto um_height = std::min(um_rows, (int) (height - 4) / 2);
     lnav_data.ld_user_message_view.set_height(vis_line_t(um_height));
 
     auto config_panel_open = (lnav_data.ld_mode == ln_mode_t::FILTER
@@ -751,7 +754,7 @@ layout_views()
 
     bool breadcrumb_open = (lnav_data.ld_mode == ln_mode_t::BREADCRUMBS);
 
-    auto bottom_min = std::min(2 + 3, height);
+    auto bottom_min = std::min(2U + 3U, height);
     auto bottom = clamped<int>::from(height, bottom_min, height);
 
     lnav_data.ld_rl_view->set_y(height - 1);
@@ -859,7 +862,7 @@ layout_views()
     lnav_data.ld_file_details_view.set_y(bottom + 2);
     lnav_data.ld_file_details_view.set_x(files_width);
     lnav_data.ld_file_details_view.set_width(
-        std::clamp(width - files_width, 0, width));
+        std::clamp(width - files_width, 0U, width));
     lnav_data.ld_file_details_view.set_visible(files_open && vis);
 
     lnav_data.ld_status[LNS_FILTER_HELP].set_visible(config_panel_open && vis);
@@ -892,9 +895,11 @@ layout_views()
 void
 update_hits(textview_curses* tc)
 {
+#if 0
     if (isendwin()) {
         return;
     }
+#endif
 
     auto top_tc = lnav_data.ld_view_stack.top();
 
@@ -989,12 +994,16 @@ update_hits(textview_curses* tc)
     }
 }
 
-static std::unordered_map<std::string, attr_line_t> EXAMPLE_RESULTS;
+using safe_example_results
+    = safe::Safe<std::unordered_map<std::string, attr_line_t>>;
+
+static safe_example_results EXAMPLE_RESULTS;
 
 static void
-execute_example(const help_text& ht)
+execute_example(std::unordered_map<std::string, attr_line_t>& res_map,
+                const help_text& ht)
 {
-    static const std::set<std::string> IGNORED_NAMES = {"ATTACH"};
+    static const std::set<std::string> IGNORED_NAMES = {"ATTACH", "DETACH"};
 
     if (IGNORED_NAMES.count(ht.ht_name)) {
         return;
@@ -1004,7 +1013,7 @@ execute_example(const help_text& ht)
     auto& dos = lnav_data.ld_db_overlay;
     auto& db_tc = lnav_data.ld_views[LNV_DB];
 
-    for (const auto& ex : ht.ht_example) {
+    for (const auto& [index, ex] : lnav::itertools::enumerate(ht.ht_example, 1)) {
         std::string alt_msg;
         attr_line_t result;
 
@@ -1012,7 +1021,7 @@ execute_example(const help_text& ht)
             continue;
         }
 
-        if (EXAMPLE_RESULTS.count(ex.he_cmd)) {
+        if (res_map.count(ex.he_cmd)) {
             continue;
         }
 
@@ -1023,8 +1032,10 @@ execute_example(const help_text& ht)
             case help_context_t::HC_SQL_TABLE_VALUED_FUNCTION:
             case help_context_t::HC_PRQL_TRANSFORM:
             case help_context_t::HC_PRQL_FUNCTION: {
+                intern_string_t ex_src = intern_string::lookup(ht.ht_name);
                 exec_context ec;
 
+                auto src_guard = ec.enter_source(ex_src, index, ex.he_cmd);
                 ec.ec_label_source_stack.push_back(&dls);
 
                 auto exec_res = execute_sql(ec, ex.he_cmd, alt_msg);
@@ -1053,11 +1064,11 @@ execute_example(const help_text& ht)
                         result.append("\n").append(al);
                     }
                 }
-
-                EXAMPLE_RESULTS[ex.he_cmd] = result;
-
+                result.with_attr_for_all(SA_PREFORMATTED.value());
                 log_trace("example: %s", ex.he_cmd);
                 log_trace("example result: %s", result.get_string().c_str());
+
+                res_map.emplace(ex.he_cmd, std::move(result));
                 break;
             }
             default:
@@ -1070,6 +1081,7 @@ execute_example(const help_text& ht)
 void
 execute_examples()
 {
+#if 0
     static const auto* sql_cmd_map
         = injector::get<readline_context::command_map_t*, sql_cmd_map_tag>();
 
@@ -1099,18 +1111,34 @@ execute_examples()
     dls.dls_max_column_width = old_width;
 
     dls.clear();
+#endif
 }
 
-attr_line_t
+const attr_line_t&
 eval_example(const help_text& ht, const help_example& ex)
 {
-    auto iter = EXAMPLE_RESULTS.find(ex.he_cmd);
+    static const auto EMPTY = attr_line_t();
+    auto res_map = EXAMPLE_RESULTS.writeAccess();
 
-    if (iter != EXAMPLE_RESULTS.end()) {
-        return iter->second;
+    for (auto _attempt : {0, 1}) {
+        const auto iter = res_map->find(ex.he_cmd);
+        if (iter != res_map->end()) {
+            return iter->second;
+        }
+
+        switch (ht.ht_context) {
+            default: {
+                auto& dls = lnav_data.ld_db_row_source;
+                auto old_width = dls.dls_max_column_width;
+                dls.dls_max_column_width = 15;
+                execute_example(*res_map, ht);
+                dls.dls_max_column_width = old_width;
+                break;
+            }
+        }
     }
 
-    return "";
+    return EMPTY;
 }
 
 bool
@@ -1321,8 +1349,7 @@ get_textview_for_mode(ln_mode_t mode)
     }
 }
 
-hist_index_delegate::
-hist_index_delegate(hist_source2& hs, textview_curses& tc)
+hist_index_delegate::hist_index_delegate(hist_source2& hs, textview_curses& tc)
     : hid_source(hs), hid_view(tc)
 {
 }
@@ -1338,7 +1365,10 @@ hist_index_delegate::index_line(logfile_sub_source& lss,
                                 logfile* lf,
                                 logfile::iterator ll)
 {
-    if (ll->is_continued() || ll->get_time() == 0) {
+    if (ll->is_continued()
+        || ll->get_time<std::chrono::microseconds>()
+            == std::chrono::microseconds::zero())
+    {
         return;
     }
 
@@ -1358,9 +1388,10 @@ hist_index_delegate::index_line(logfile_sub_source& lss,
             break;
     }
 
-    this->hid_source.add_value(ll->get_time(), ht);
+    this->hid_source.add_value(ll->get_time<std::chrono::microseconds>(), ht);
     if (ll->is_marked() || ll->is_expr_marked()) {
-        this->hid_source.add_value(ll->get_time(), hist_source2::HT_MARK);
+        this->hid_source.add_value(ll->get_time<std::chrono::microseconds>(),
+                                   hist_source2::HT_MARK);
     }
 }
 
@@ -1492,6 +1523,10 @@ set_view_mode(ln_mode_t mode)
             break;
     }
     switch (mode) {
+        case ln_mode_t::SEARCH: {
+            lnav_data.ld_status[LNS_DOC].set_needs_update();
+            break;
+        }
         case ln_mode_t::BREADCRUMBS: {
             breadcrumb_view->focus();
             break;
@@ -1538,12 +1573,12 @@ all_views()
 }
 
 void
-lnav_behavior::mouse_event(int button, bool release, int x, int y)
+lnav_behavior::mouse_event(
+    notcurses* nc, int button, bool release, int x, int y)
 {
     static auto* breadcrumb_view = injector::get<breadcrumb_curses*>();
     static const auto VIEWS = all_views();
-    static const auto CLICK_INTERVAL
-        = std::chrono::milliseconds(mouseinterval(-1) * 2);
+    static const auto CLICK_INTERVAL = 333ms;
 
     struct mouse_event me;
 
@@ -1582,7 +1617,7 @@ lnav_behavior::mouse_event(int button, bool release, int x, int y)
         me.me_state = mouse_button_state_t::BUTTON_STATE_PRESSED;
     }
 
-    auto width = getmaxx(lnav_data.ld_window);
+    auto width = ncplane_dim_x(lnav_data.ld_window);
 
     me.me_press_x = this->lb_last_event.me_press_x;
     me.me_press_y = this->lb_last_event.me_press_y;

@@ -1,3 +1,16 @@
+## lnav v0.12.4
+
+Features:
+* Log message timestamps are now represented with microsecond
+  precision internally instead of just millisecond.
+
+Bug Fixes:
+* Improved startup time.
+* Reduced memory footprint.
+
+Maintenance:
+* Replaced ncurses with notcurses.
+
 ## lnav v0.12.3
 
 Features:

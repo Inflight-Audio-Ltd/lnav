@@ -498,6 +498,8 @@ rl_change(readline_curses* rc)
 static void
 rl_search_internal(readline_curses* rc, ln_mode_t mode, bool complete = false)
 {
+    static const intern_string_t SRC = intern_string::lookup("prompt");
+
     auto* tc = get_textview_for_mode(mode);
     std::string term_val;
     std::string name;
@@ -619,6 +621,8 @@ rl_search_internal(readline_curses* rc, ln_mode_t mode, bool complete = false)
                     prev_stage_prql.append(" | take 5");
 
                     curr_stage_index = 1;
+                    auto src_guard = lnav_data.ld_exec_context.enter_source(
+                        SRC, 1, prev_stage_prql.get_string());
                     auto db_guard = lnav_data.ld_exec_context.enter_db_source(
                         &lnav_data.ld_db_preview_source[0]);
                     auto exec_res = execute_sql(lnav_data.ld_exec_context,
@@ -652,6 +656,8 @@ rl_search_internal(readline_curses* rc, ln_mode_t mode, bool complete = false)
                     }
                 }
 
+                auto src_guard = lnav_data.ld_exec_context.enter_source(
+                    SRC, 1, curr_stage_prql.get_string());
                 auto db_guard = lnav_data.ld_exec_context.enter_db_source(
                     &lnav_data.ld_db_preview_source[curr_stage_index]);
                 auto exec_res = execute_sql(lnav_data.ld_exec_context,
@@ -843,6 +849,8 @@ lnav_rl_abort(readline_curses* rc)
 static void
 rl_callback_int(readline_curses* rc, bool is_alt)
 {
+    static const intern_string_t SRC = intern_string::lookup("prompt");
+
     textview_curses* tc = get_textview_for_mode(lnav_data.ld_mode);
     exec_context& ec = lnav_data.ld_exec_context;
     std::string alt_msg;
@@ -885,8 +893,10 @@ rl_callback_int(readline_curses* rc, bool is_alt)
 
         case ln_mode_t::COMMAND: {
             rc->set_alt_value("");
-            ec.ec_source.back().s_content
-                = fmt::format(FMT_STRING(":{}"), rc->get_value().get_string());
+            auto src_guard = lnav_data.ld_exec_context.enter_source(
+                SRC,
+                1,
+                fmt::format(FMT_STRING(":{}"), rc->get_value().get_string()));
             readline_lnav_highlighter(ec.ec_source.back().s_content, -1);
             ec.ec_source.back().s_content.with_attr_for_all(
                 VC_ROLE.value(role_t::VCR_QUOTED_CODE));
@@ -970,8 +980,8 @@ rl_callback_int(readline_curses* rc, bool is_alt)
 
         case ln_mode_t::SQL: {
             auto sql_str = rc->get_value().get_string();
-            ec.ec_source.back().s_content
-                = fmt::format(FMT_STRING(";{}"), sql_str);
+            auto src_guard = lnav_data.ld_exec_context.enter_source(
+                SRC, 1, fmt::format(FMT_STRING(";{}"), sql_str));
             readline_lnav_highlighter(ec.ec_source.back().s_content, -1);
             ec.ec_source.back().s_content.with_attr_for_all(
                 VC_ROLE.value(role_t::VCR_QUOTED_CODE));
@@ -1038,7 +1048,11 @@ rl_callback_int(readline_curses* rc, bool is_alt)
                         "tmp",
                         std::make_pair(fdopen(tmp_pair.second.release(), "w"),
                                        fclose));
-
+                    auto src_guard = lnav_data.ld_exec_context.enter_source(
+                        SRC,
+                        1,
+                        fmt::format(FMT_STRING("|{}"),
+                                    path_and_args.get_string()));
                     auto exec_res
                         = execute_file(ec, path_and_args.get_string());
                     if (exec_res.isOk()) {
@@ -1103,14 +1117,11 @@ rl_display_matches(readline_curses* rc)
 {
     const auto& matches = rc->get_matches();
     auto& tc = lnav_data.ld_match_view;
-    unsigned long width;
-    __attribute((unused)) unsigned long height;
-    int max_len, cols;
+    int cols;
 
-    getmaxyx(lnav_data.ld_window, height, width);
-
-    max_len = rc->get_max_match_length() + 2;
-    cols = std::max(1UL, width / max_len);
+    auto width = ncplane_dim_x(lnav_data.ld_window);
+    auto max_len = rc->get_max_match_length() + 2;
+    cols = std::max(1U, width / max_len);
 
     if (matches.empty()) {
         lnav_data.ld_match_source.clear();
@@ -1126,7 +1137,7 @@ rl_display_matches(readline_curses* rc)
                 add_nl = false;
             }
             if (match == current_match) {
-                al.append(match, VC_STYLE.value(text_attrs{A_REVERSE}));
+                al.append(match, VC_STYLE.value(text_attrs::with_reverse()));
             } else {
                 al.append(match);
             }
@@ -1189,6 +1200,7 @@ rl_blur(readline_curses* rc)
                    .get_overlay_source();
 
     fos->fos_contexts.pop();
+    ensure(!fos->fos_contexts.empty());
     for (auto& tc : lnav_data.ld_views) {
         tc.set_sync_selection_and_top(false);
     }

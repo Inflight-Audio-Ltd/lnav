@@ -655,14 +655,18 @@ com_convert_time_to(exec_context& ec,
         try {
             auto* dst_tz = date::locate_zone(args[1]);
             auto utime = date::local_time<std::chrono::seconds>{
-                std::chrono::seconds{ll->get_time()}};
+                ll->get_time<std::chrono::seconds>()};
             auto cz_time = lnav::to_sys_time(utime);
             auto dz_time = date::make_zoned(dst_tz, cz_time);
             auto etime = std::chrono::duration_cast<std::chrono::seconds>(
                 dz_time.get_local_time().time_since_epoch());
             char ftime[128];
             sql_strftime(
-                ftime, sizeof(ftime), etime.count(), ll->get_millis(), 'T');
+                ftime,
+                sizeof(ftime),
+                etime.count(),
+                ll->get_subsecond_time<std::chrono::milliseconds>().count(),
+                'T');
             retval = ftime;
 
             off_t off = 0;
@@ -1570,12 +1574,9 @@ com_save_to(exec_context& ec,
 
         if (!ec_out) {
             outfile = stdout;
-            nodelay(lnav_data.ld_window, 0);
-            endwin();
-            struct termios curr_termios;
-            tcgetattr(1, &curr_termios);
-            curr_termios.c_oflag |= ONLCR | OPOST;
-            tcsetattr(1, TCSANOW, &curr_termios);
+            if (ec.ec_ui_callbacks.uc_pre_stdout_write) {
+                ec.ec_ui_callbacks.uc_pre_stdout_write();
+            }
             setvbuf(stdout, nullptr, _IONBF, 0);
             to_term = true;
             fprintf(outfile,
@@ -1939,7 +1940,7 @@ com_save_to(exec_context& ec,
             ++y;
         }
         for (auto iter = all_user_marks.begin(); iter != all_user_marks.end();
-             iter++, count++)
+             ++iter, count++)
         {
             if (ec.ec_dry_run && count > 10) {
                 break;
@@ -1966,16 +1967,18 @@ com_save_to(exec_context& ec,
 
         if (fos != nullptr) {
             fos->fos_contexts.pop();
+            ensure(!fos->fos_contexts.empty());
         }
     }
 
     fflush(outfile);
 
     if (to_term) {
-        cbreak();
-        getch();
-        refresh();
-        nodelay(lnav_data.ld_window, 1);
+        if (ec.ec_ui_callbacks.uc_post_stdout_write) {
+            ec.ec_ui_callbacks.uc_post_stdout_write();
+        } else {
+            log_debug("no post stdout write callback");
+        }
     }
     if (ec.ec_dry_run) {
         rewind(outfile);
@@ -2295,7 +2298,7 @@ com_highlight(exec_context& ec,
         auto hl_attrs = view_colors::singleton().attrs_for_ident(args[1]);
 
         if (ec.ec_dry_run) {
-            hl_attrs.ta_attrs |= A_BLINK;
+            hl_attrs |= text_attrs::style::blink;
         }
 
         hl.with_attrs(hl_attrs);
@@ -2435,8 +2438,10 @@ com_filter(exec_context& ec,
                 highlighter hl(compile_res.unwrap().to_shared());
                 auto role = (args[0] == "filter-out") ? role_t::VCR_DIFF_DELETE
                                                       : role_t::VCR_DIFF_ADD;
+
                 hl.with_role(role);
-                hl.with_attrs(text_attrs{A_BLINK | A_REVERSE});
+                hl.with_attrs(text_attrs::with_styles(
+                    text_attrs::style::blink, text_attrs::style::reverse));
 
                 hm[{highlight_source_t::PREVIEW, "preview"}] = hl;
                 tc->reload_data();
@@ -2881,7 +2886,7 @@ com_create_search_table(exec_context& ec,
             highlighter hl(re);
 
             hl.with_role(role_t::VCR_INFO);
-            hl.with_attrs(text_attrs{A_BLINK});
+            hl.with_attrs(text_attrs::with_blink());
 
             hm[{highlight_source_t::PREVIEW, "preview"}] = hl;
             tc->reload_data();
@@ -4701,12 +4706,10 @@ com_export_session_to(exec_context& ec,
 
             if (!ec_out) {
                 outfile = auto_mem<FILE>::leak(stdout);
-                nodelay(lnav_data.ld_window, 0);
-                endwin();
-                struct termios curr_termios;
-                tcgetattr(1, &curr_termios);
-                curr_termios.c_oflag |= ONLCR | OPOST;
-                tcsetattr(1, TCSANOW, &curr_termios);
+
+                if (ec.ec_ui_callbacks.uc_pre_stdout_write) {
+                    ec.ec_ui_callbacks.uc_pre_stdout_write();
+                }
                 setvbuf(stdout, nullptr, _IONBF, 0);
                 to_term = true;
                 fprintf(outfile,
@@ -4741,10 +4744,9 @@ com_export_session_to(exec_context& ec,
 
         fflush(outfile.in());
         if (to_term) {
-            cbreak();
-            getch();
-            refresh();
-            nodelay(lnav_data.ld_window, 1);
+            if (ec.ec_ui_callbacks.uc_post_stdout_write) {
+                ec.ec_ui_callbacks.uc_post_stdout_write();
+            }
         }
         if (export_res.isErr()) {
             return Err(export_res.unwrapErr());
@@ -5303,8 +5305,8 @@ com_redraw(exec_context& ec,
 {
     if (args.empty()) {
     } else if (ec.ec_dry_run) {
-    } else if (lnav_data.ld_window) {
-        redrawwin(lnav_data.ld_window);
+    } else if (ec.ec_ui_callbacks.uc_redraw) {
+        ec.ec_ui_callbacks.uc_redraw();
     }
 
     return Ok(std::string());
@@ -5844,16 +5846,11 @@ command_prompt(std::vector<std::string>& args)
             struct timeval tv = lf->get_time_offset();
             char buffer[64];
 
-            sql_strftime(
-                buffer, sizeof(buffer), ll->get_time(), ll->get_millis(), 'T');
+            sql_strftime(buffer, sizeof(buffer), ll->get_timeval(), 'T');
             rlc->add_possibility(ln_mode_t::COMMAND, "line-time", buffer);
             rlc->add_possibility(ln_mode_t::COMMAND, "move-args", buffer);
             rlc->add_possibility(ln_mode_t::COMMAND, "move-time", buffer);
-            sql_strftime(buffer,
-                         sizeof(buffer),
-                         ll->get_time() - tv.tv_sec,
-                         ll->get_millis() - (tv.tv_usec / 1000),
-                         'T');
+            sql_strftime(buffer, sizeof(buffer), ll->get_timeval() - tv, 'T');
             rlc->add_possibility(ln_mode_t::COMMAND, "line-time", buffer);
             rlc->add_possibility(ln_mode_t::COMMAND, "move-args", buffer);
             rlc->add_possibility(ln_mode_t::COMMAND, "move-time", buffer);
@@ -5927,8 +5924,9 @@ script_prompt(std::vector<std::string>& args)
 static void
 search_prompt(std::vector<std::string>& args)
 {
-    textview_curses* tc = *lnav_data.ld_view_stack.top();
+    auto* tc = *lnav_data.ld_view_stack.top();
 
+    log_debug("search prompt");
     set_view_mode(ln_mode_t::SEARCH);
     lnav_data.ld_search_start_line = tc->get_selection();
     add_view_text_possibilities(

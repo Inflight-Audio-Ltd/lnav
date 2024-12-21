@@ -84,10 +84,12 @@ get_css_color_names()
 {
     static const intern_string_t iname
         = intern_string::lookup(css_color_names_json.get_name());
+    static auto sfp = css_color_names_json.to_string_fragment_producer();
     static const auto INSTANCE
         = css_color_names_handlers.parser_for(iname)
-              .of(css_color_names_json.to_string_fragment())
+              .of(*sfp)
               .unwrap();
+    log_debug("CSS color name count %d", INSTANCE.ccn_name_to_color.size());
 
     return INSTANCE;
 }
@@ -95,8 +97,9 @@ get_css_color_names()
 term_color_palette*
 xterm_colors()
 {
-    static term_color_palette retval(xterm_palette_json.get_name(),
-                                     xterm_palette_json.to_string_fragment());
+    static term_color_palette retval(
+        xterm_palette_json.get_name(),
+        *xterm_palette_json.to_string_fragment_producer());
 
     return &retval;
 }
@@ -104,8 +107,9 @@ xterm_colors()
 term_color_palette*
 ansi_colors()
 {
-    static term_color_palette retval(ansi_palette_json.get_name(),
-                                     ansi_palette_json.to_string_fragment());
+    static term_color_palette retval(
+        ansi_palette_json.get_name(),
+        *ansi_palette_json.to_string_fragment_producer());
 
     return &retval;
 }
@@ -175,8 +179,8 @@ from(string_fragment sf)
         sf));
 }
 
-term_color_palette::
-term_color_palette(const char* name, const string_fragment& json)
+term_color_palette::term_color_palette(const char* name,
+                                       string_fragment_producer& json)
 {
     intern_string_t iname = intern_string::lookup(name);
     auto parse_res
@@ -196,14 +200,14 @@ term_color_palette(const char* name, const string_fragment& json)
     }
 }
 
-short
+uint8_t
 term_color_palette::match_color(const lab_color& to_match) const
 {
     double lowest = 1000.0;
     short lowest_id = -1;
 
     for (const auto& xc : this->tc_palette) {
-        double xc_delta = xc.xc_lab_color.deltaE(to_match);
+        const double xc_delta = xc.xc_lab_color.deltaE(to_match);
 
         if (lowest_id == -1) {
             lowest = xc_delta;
@@ -223,6 +227,7 @@ term_color_palette::match_color(const lab_color& to_match) const
 }
 
 namespace styling {
+
 Result<color_unit, std::string>
 color_unit::from_str(const string_fragment& sf)
 {
@@ -231,6 +236,9 @@ color_unit::from_str(const string_fragment& sf)
     }
 
     auto retval = TRY(from<rgb_color>(sf));
+    if (retval.empty()) {
+        return Ok(make_empty());
+    }
 
     return Ok(color_unit{retval});
 }
