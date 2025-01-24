@@ -34,6 +34,8 @@
 
 #include <optional>
 #include <ostream>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <assert.h>
@@ -43,7 +45,6 @@
 #include "fmt/format.h"
 #include "mapbox/variant.hpp"
 #include "result.h"
-#include "scn/util/string_view.h"
 #include "strnatcmp.h"
 
 unsigned long hash_str(const char* str, size_t len);
@@ -51,12 +52,17 @@ unsigned long hash_str(const char* str, size_t len);
 struct string_fragment {
     using iterator = const char*;
 
-    static string_fragment invalid()
+    static constexpr string_fragment invalid()
     {
         string_fragment retval;
 
         retval.invalidate();
         return retval;
+    }
+
+    static string_fragment from_string_view(std::string_view str)
+    {
+        return string_fragment{str.data(), 0, (int) str.size()};
     }
 
     static string_fragment from_c_str(const char* str)
@@ -71,7 +77,7 @@ struct string_fragment {
     }
 
     template<typename T, std::size_t N>
-    static string_fragment from_const(const T (&str)[N])
+    static constexpr string_fragment from_const(const T (&str)[N])
     {
         return string_fragment{str, 0, (int) N - 1};
     }
@@ -118,8 +124,15 @@ struct string_fragment {
         return string_fragment{bytes, (int) begin, (int) end};
     }
 
-    explicit string_fragment(const char* str = "", int begin = 0, int end = -1)
-        : sf_string(str), sf_begin(begin), sf_end(end == -1 ? strlen(str) : end)
+    constexpr string_fragment() : sf_string(nullptr), sf_begin(0), sf_end(0) {}
+
+    explicit constexpr string_fragment(const char* str,
+                                       int begin = 0,
+                                       int end = -1)
+        : sf_string(str), sf_begin(begin),
+          sf_end(end == -1
+                     ? static_cast<int>(std::string::traits_type::length(str))
+                     : end)
     {
     }
 
@@ -329,7 +342,7 @@ struct string_fragment {
     {
         assert((int) start <= this->length());
 
-        if (start > 0 && start == this->length()) {
+        if (start > 0 && start == static_cast<size_t>(this->length())) {
             start -= 1;
         }
         while (start > 0) {
@@ -575,7 +588,7 @@ struct string_fragment {
         this->sf_end = 0;
     }
 
-    void invalidate()
+    constexpr void invalidate()
     {
         this->sf_begin = -1;
         this->sf_end = -1;
@@ -631,9 +644,11 @@ struct string_fragment {
         };
     }
 
-    scn::string_view to_string_view() const
+    std::string_view to_string_view() const
     {
-        return scn::string_view{this->begin(), this->end()};
+        return std::string_view{
+            this->data(),
+            static_cast<std::string_view::size_type>(this->length())};
     }
 
     enum class case_style {
@@ -960,7 +975,7 @@ to_string_fragment(const std::string& s)
 }
 
 inline string_fragment
-to_string_fragment(const scn::string_view& sv)
+to_string_fragment(const std::string_view& sv)
 {
     return string_fragment::from_bytes(sv.data(), sv.length());
 }

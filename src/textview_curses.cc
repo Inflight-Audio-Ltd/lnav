@@ -38,7 +38,6 @@
 #include "base/time_util.hh"
 #include "config.h"
 #include "data_scanner.hh"
-#include "date/solar_hijri.h"
 #include "fmt/format.h"
 #include "lnav_config.hh"
 #include "log_format_fwd.hh"
@@ -46,7 +45,7 @@
 #include "shlex.hh"
 #include "view_curses.hh"
 
-const auto REVERSE_SEARCH_OFFSET = 2000_vl;
+constexpr auto REVERSE_SEARCH_OFFSET = 2000_vl;
 
 void
 text_filter::revert_to_last(logfile_filter_state& lfs, size_t rollback_size)
@@ -376,15 +375,22 @@ textview_curses::grep_end(grep_proc<vis_line_t>& gp)
 {
     this->tc_searching -= 1;
     this->grep_end_batch(gp);
+    if (this->tc_searching == 0 && this->tc_search_start_time) {
+        const auto now = std::chrono::steady_clock::now();
+        this->tc_search_duration
+            = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - this->tc_search_start_time.value());
+        this->tc_search_start_time = std::nullopt;
+        if (this->tc_state_event_handler) {
+            this->tc_state_event_handler(*this);
+        }
+    }
 
     ensure(this->tc_searching >= 0);
 }
 
 void
-textview_curses::grep_match(grep_proc<vis_line_t>& gp,
-                            vis_line_t line,
-                            int start,
-                            int end)
+textview_curses::grep_match(grep_proc<vis_line_t>& gp, vis_line_t line)
 {
     this->tc_bookmarks[&BM_SEARCH].insert_once(vis_line_t(line));
     if (this->tc_sub_source != nullptr) {
@@ -556,6 +562,7 @@ textview_curses::handle_mouse(mouse_event& me)
                                             tok_sf.sf_begin,
                                             tok_sf.sf_end,
                                         },
+                                        al.al_attrs,
                                         tok_sf.to_string(),
                                     };
                                     this->set_needs_update();
@@ -612,6 +619,7 @@ textview_curses::handle_mouse(mouse_event& me)
                                     cursor_sf.sf_begin,
                                     cursor_sf.sf_end,
                                 },
+                                al.al_attrs,
                                 cursor_sf.to_string(),
                             };
                         }
@@ -681,9 +689,7 @@ textview_curses::handle_mouse(mouse_event& me)
                 }
                 this->tc_selection_start = std::nullopt;
             }
-            if (me.me_button == mouse_button_t::BUTTON_LEFT
-                && mouse_line.is<main_content>())
-            {
+            if (mouse_line.is<main_content>()) {
                 const auto& [mc_line] = mouse_line.get<main_content>();
                 attr_line_t al;
 
@@ -691,18 +697,31 @@ textview_curses::handle_mouse(mouse_event& me)
                 auto line_sf = string_fragment::from_str(al.get_string());
                 auto cursor_sf = line_sf.sub_cell_range(
                     this->lv_left + me.me_x, this->lv_left + me.me_x);
-                auto attr_iter = find_string_attr_containing(
+                auto link_iter = find_string_attr_containing(
                     al.get_attrs(), &VC_HYPERLINK, cursor_sf.sf_begin);
-                if (attr_iter != al.get_attrs().end()) {
-                    auto href = attr_iter->sa_value.get<std::string>();
+                if (link_iter != al.get_attrs().end()) {
+                    auto href = link_iter->sa_value.get<std::string>();
+                    auto* ta = dynamic_cast<text_anchors*>(this->tc_sub_source);
 
-                    this->tc_selected_text = selected_text_info{
-                        me.me_x,
-                        mc_line,
-                        attr_iter->sa_range,
-                        al.to_string_fragment(attr_iter).to_string(),
-                        href,
-                    };
+                    if (me.me_button == mouse_button_t::BUTTON_LEFT
+                        && ta != nullptr && startswith(href, "#")
+                        && !startswith(href, "#/frontmatter"))
+                    {
+                        auto row_opt = ta->row_for_anchor(href);
+
+                        if (row_opt.has_value()) {
+                            this->set_selection(row_opt.value());
+                        }
+                    } else {
+                        this->tc_selected_text = selected_text_info{
+                            me.me_x,
+                            mc_line,
+                            link_iter->sa_range,
+                            al.get_attrs(),
+                            al.to_string_fragment(link_iter).to_string(),
+                            href,
+                        };
+                    }
                 }
             }
             if (this->tc_delegate != nullptr) {
@@ -737,7 +756,6 @@ textview_curses::textview_value_for_row(vis_line_t row, attr_line_t& value_out)
         require_ge(attr.sa_range.lr_start, 0);
     }
 
-    scrub_ansi_string(str, &sa);
     struct line_range body, orig_line;
 
     body = find_string_attr_range(sa, &SA_BODY);
@@ -897,6 +915,8 @@ textview_curses::execute_search(const std::string& regex_orig)
             if (top > 0) {
                 gp->queue_request(0_vl, top);
             }
+            this->tc_search_start_time = std::chrono::steady_clock::now();
+            this->tc_search_duration = std::nullopt;
             gp->start();
 
             this->tc_search_child = std::make_shared<grep_highlighter>(
@@ -1003,13 +1023,11 @@ textview_curses::toggle_user_mark(const bookmark_type_t* bm,
     if (end_line >= this->get_inner_height()) {
         end_line = vis_line_t(this->get_inner_height() - 1);
     }
-    for (vis_line_t curr_line = start_line; curr_line <= end_line; ++curr_line)
-    {
-        bookmark_vector<vis_line_t>& bv = this->tc_bookmarks[bm];
-        bookmark_vector<vis_line_t>::iterator iter;
+    for (auto curr_line = start_line; curr_line <= end_line; ++curr_line) {
+        auto& bv = this->tc_bookmarks[bm];
         bool added;
 
-        iter = bv.insert_once(curr_line);
+        auto iter = bv.insert_once(curr_line);
         if (iter == bv.end()) {
             added = true;
         } else {
@@ -1075,21 +1093,26 @@ textview_curses::set_sub_source(text_sub_source* src)
     return *this;
 }
 
-bool
+std::optional<line_info>
 textview_curses::grep_value_for_line(vis_line_t line, std::string& value_out)
 {
-    bool retval = false;
-
     if (this->tc_sub_source
         && line < (int) this->tc_sub_source->text_line_count())
     {
-        this->tc_sub_source->text_value_for_line(
+        auto retval = this->tc_sub_source->text_value_for_line(
             *this, line, value_out, text_sub_source::RF_RAW);
-        scrub_ansi_string(value_out, nullptr);
-        retval = true;
+        if (retval.li_utf8_scan_result.is_valid()
+            && retval.li_utf8_scan_result.usr_has_ansi)
+        {
+            // log_debug("has ansi %d",
+            // retval.li_utf8_scan_result.usr_has_ansi);
+            auto new_size = erase_ansi_escapes(value_out);
+            value_out.resize(new_size);
+        }
+        return retval;
     }
 
-    return retval;
+    return std::nullopt;
 }
 
 void
@@ -1381,6 +1404,12 @@ logfile_filter_state::resize(size_t newsize)
                0,
                sizeof(uint32_t) * (newsize - old_mask_size));
     }
+}
+
+void
+logfile_filter_state::reserve(size_t expected)
+{
+    this->tfs_mask.reserve(expected);
 }
 
 std::optional<size_t>

@@ -34,7 +34,6 @@
 
 #include <cmath>
 #include <limits>
-#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -67,6 +66,34 @@ struct stacked_bar_chart_base {
         forward,
         backward,
     };
+};
+
+struct bucket_stats_t {
+    bucket_stats_t()
+        : bs_min_value(std::numeric_limits<double>::max()),
+          bs_max_value(std::numeric_limits<double>::min())
+    {
+    }
+
+    void merge(const bucket_stats_t& rhs)
+    {
+        this->bs_min_value = std::min(this->bs_min_value, rhs.bs_min_value);
+        this->bs_max_value = std::max(this->bs_max_value, rhs.bs_max_value);
+    }
+
+    double width() const
+    {
+        return std::fabs(this->bs_max_value - this->bs_min_value);
+    }
+
+    void update(double value)
+    {
+        this->bs_max_value = std::max(this->bs_max_value, value);
+        this->bs_min_value = std::min(this->bs_min_value, value);
+    }
+
+    double bs_min_value;
+    double bs_max_value;
 };
 
 template<typename T>
@@ -178,82 +205,9 @@ public:
                                unsigned long width,
                                const T& ident,
                                double value,
-                               string_attrs_t& value_out) const
-    {
-        auto ident_iter = this->sbc_ident_lookup.find(ident);
-
-        require(ident_iter != this->sbc_ident_lookup.end());
-
-        size_t ident_index = ident_iter->second;
-        unsigned long avail_width;
-        bucket_stats_t overall_stats;
-        struct line_range lr;
-
-        lr.lr_unit = line_range::unit::codepoint;
-
-        size_t ident_to_show = this->sbc_show_state.match(
-            [](const show_none) { return -1; },
-            [ident_index](const show_all) { return ident_index; },
-            [](const show_one& one) { return one.so_index; });
-
-        if (ident_to_show != ident_index) {
-            return;
-        }
-
-        for (size_t lpc = 0; lpc < this->sbc_idents.size(); lpc++) {
-            if (this->sbc_show_state.template is<show_all>()
-                || lpc == (size_t) ident_to_show)
-            {
-                overall_stats.merge(this->sbc_idents[lpc].ci_stats);
-            }
-        }
-        if (this->sbc_max_row_value > overall_stats.bs_max_value) {
-            overall_stats.bs_max_value = this->sbc_max_row_value;
-        }
-        if (this->sbc_row_sum > overall_stats.bs_max_value) {
-            overall_stats.bs_max_value = this->sbc_row_sum;
-        }
-
-        if (this->sbc_show_state.template is<show_all>()) {
-            if (this->sbc_idents.size() == 1) {
-                avail_width = width;
-            } else if (width < this->sbc_max_row_items) {
-                avail_width = 0;
-            } else {
-                avail_width = width;
-            }
-        } else {
-            avail_width = width - 1;
-        }
-        if (avail_width > (this->sbc_left + this->sbc_right)) {
-            avail_width -= this->sbc_left + this->sbc_right;
-        }
-
-        lr.lr_start = left;
-
-        const auto& ci = this->sbc_idents[ident_index];
-        int amount;
-
-        if (value == 0.0 || avail_width < 0) {
-            amount = 0;
-        } else if ((overall_stats.bs_max_value - 0.01) <= value
-                   && value <= (overall_stats.bs_max_value + 0.01))
-        {
-            amount = avail_width;
-        } else {
-            double percent
-                = (value - overall_stats.bs_min_value) / overall_stats.width();
-            amount = (int) rint(percent * avail_width);
-            amount = std::max(1, amount);
-        }
-        require_ge(amount, 0);
-        lr.lr_end = left = lr.lr_start + amount;
-
-        if (!ci.ci_attrs.empty() && !lr.empty()) {
-            const auto rev_attrs = ci.ci_attrs | text_attrs::style::reverse;
-            value_out.emplace_back(lr, VC_STYLE.value(rev_attrs));
-        }
-    }
+                               string_attrs_t& value_out,
+                               std::optional<text_attrs> user_attrs
+                               = std::nullopt) const;
 
     void clear()
     {
@@ -290,33 +244,6 @@ public:
         this->sbc_row_counter += 1;
     }
 
-    struct bucket_stats_t {
-        bucket_stats_t()
-            : bs_min_value(std::numeric_limits<double>::max()), bs_max_value(0)
-        {
-        }
-
-        void merge(const bucket_stats_t& rhs)
-        {
-            this->bs_min_value = std::min(this->bs_min_value, rhs.bs_min_value);
-            this->bs_max_value = std::max(this->bs_max_value, rhs.bs_max_value);
-        }
-
-        double width() const
-        {
-            return std::fabs(this->bs_max_value - this->bs_min_value);
-        }
-
-        void update(double value)
-        {
-            this->bs_max_value = std::max(this->bs_max_value, value);
-            this->bs_min_value = std::min(this->bs_min_value, value);
-        }
-
-        double bs_min_value;
-        double bs_max_value;
-    };
-
     const bucket_stats_t& get_stats_for(const T& ident)
     {
         const chart_ident& ci = this->find_ident(ident);
@@ -334,7 +261,7 @@ protected:
         ssize_t ci_last_seen_row{-1};
     };
 
-    struct chart_ident& find_ident(const T& ident)
+    chart_ident& find_ident(const T& ident)
     {
         auto iter = this->sbc_ident_lookup.find(ident);
         if (iter == this->sbc_ident_lookup.end()) {
@@ -347,7 +274,7 @@ protected:
 
     bool sbc_do_stacking{true};
     unsigned long sbc_left{0}, sbc_right{0};
-    std::vector<struct chart_ident> sbc_idents;
+    std::vector<chart_ident> sbc_idents;
     std::unordered_map<T, unsigned int> sbc_ident_lookup;
     show_state sbc_show_state{show_none()};
 
@@ -377,9 +304,15 @@ public:
 
     void init();
 
-    void set_time_slice(std::chrono::microseconds slice) { this->hs_time_slice = slice; }
+    void set_time_slice(std::chrono::microseconds slice)
+    {
+        this->hs_time_slice = slice;
+    }
 
-    std::chrono::microseconds get_time_slice() const { return this->hs_time_slice; }
+    std::chrono::microseconds get_time_slice() const
+    {
+        return this->hs_time_slice;
+    }
 
     size_t text_line_count() override { return this->hs_line_count; }
 
@@ -390,14 +323,16 @@ public:
 
     void clear();
 
-    void add_value(std::chrono::microseconds row, hist_type_t htype, double value = 1.0);
+    void add_value(std::chrono::microseconds ts,
+                   hist_type_t htype,
+                   double value = 1.0);
 
     void end_of_row();
 
-    void text_value_for_line(textview_curses& tc,
-                             int row,
-                             std::string& value_out,
-                             line_flags_t flags) override;
+    line_info text_value_for_line(textview_curses& tc,
+                                  int row,
+                                  std::string& value_out,
+                                  line_flags_t flags) override;
 
     void text_attrs_for_line(textview_curses& tc,
                              int row,
@@ -412,7 +347,7 @@ public:
 
     std::optional<row_info> time_for_row(vis_line_t row) override;
 
-    std::optional<vis_line_t> row_for_time(struct timeval tv_bucket) override;
+    std::optional<vis_line_t> row_for_time(timeval tv_bucket) override;
 
 private:
     struct hist_value {
@@ -424,7 +359,7 @@ private:
         hist_value b_values[HT__MAX];
     };
 
-    static const int64_t BLOCK_SIZE = 100;
+    static constexpr int64_t BLOCK_SIZE = 100;
 
     struct bucket_block {
         bucket_block()
@@ -440,9 +375,9 @@ private:
 
     std::chrono::microseconds hs_time_slice{10 * 60};
     int64_t hs_line_count;
-    int64_t hs_last_bucket;
-    std::chrono::microseconds hs_last_row;
-    std::map<int64_t, struct bucket_block> hs_blocks;
+    int64_t hs_current_row;
+    std::chrono::microseconds hs_last_ts;
+    std::vector<bucket_block> hs_blocks;
     stacked_bar_chart<hist_type_t> hs_chart;
     bool hs_needs_flush{false};
 };

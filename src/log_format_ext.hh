@@ -32,6 +32,7 @@
 #ifndef lnav_log_format_ext_hh
 #define lnav_log_format_ext_hh
 
+#include <list>
 #include <unordered_map>
 
 #include "log_format.hh"
@@ -42,13 +43,6 @@ class module_format;
 
 class external_log_format : public log_format {
 public:
-    struct sample {
-        positioned_property<std::string> s_line;
-        std::string s_description;
-        log_level_t s_level{LEVEL_UNKNOWN};
-        std::set<std::string> s_matched_regexes;
-    };
-
     struct value_def {
         value_def(intern_string_t name,
                   value_kind_t kind,
@@ -75,6 +69,8 @@ public:
         std::string vd_rewriter;
         std::string vd_description;
         intern_string_t vd_rewrite_src_name;
+        bool vd_used_in_line_format{false};
+        bool vd_is_desc_field{false};
     };
 
     struct indexed_value_def {
@@ -142,6 +138,10 @@ public:
 
     match_name_result match_name(const std::string& filename) override;
 
+    scan_result_t test_line(
+        sample_t& sample,
+        std::vector<lnav::console::user_message>& msgs) override;
+
     scan_result_t scan(logfile& lf,
                        std::vector<logline>& dst,
                        const line_info& offset,
@@ -167,7 +167,7 @@ public:
     void register_vtabs(log_vtab_manager* vtab_manager,
                         std::vector<lnav::console::user_message>& errors);
 
-    bool match_samples(const std::vector<sample>& samples) const;
+    bool match_samples(const std::vector<sample_t>& samples) const;
 
     bool hide_field(const intern_string_t field_name, bool val) override;
 
@@ -286,12 +286,12 @@ public:
         bool vlcr_valid_utf{true};
     };
 
-    value_line_count_result value_line_count(const intern_string_t ist,
+    value_line_count_result value_line_count(const value_def* vd,
                                              bool top_level,
-                                             std::optional<double> val
-                                             = std::nullopt,
-                                             const unsigned char* str = nullptr,
-                                             ssize_t len = -1);
+                                             std::optional<double> val,
+                                             const unsigned char* str,
+                                             ssize_t len,
+                                             yajl_string_props_t* props);
 
     bool has_value_def(const intern_string_t ist) const
     {
@@ -328,7 +328,7 @@ public:
     factory_container<lnav::pcre2pp::code> elf_filename_pcre;
     std::map<std::string, std::shared_ptr<pattern>> elf_patterns;
     std::vector<std::shared_ptr<pattern>> elf_pattern_order;
-    std::vector<sample> elf_samples;
+    std::vector<sample_t> elf_samples;
     std::unordered_map<const intern_string_t, std::shared_ptr<value_def>>
         elf_value_defs;
 
@@ -341,6 +341,8 @@ public:
     value_defs_state elf_specialized_value_defs_state;
 
     std::vector<std::shared_ptr<value_def>> elf_value_def_order;
+    robin_hood::unordered_map<string_fragment, value_def*, frag_hasher>
+        elf_value_def_frag_map;
     std::vector<std::shared_ptr<value_def>> elf_numeric_value_defs;
     size_t elf_column_count{0};
     double elf_timestamp_divisor{1.0};
@@ -393,6 +395,11 @@ public:
     };
 
     elf_type_t elf_type{elf_type_t::ELF_TYPE_TEXT};
+
+    scan_result_t scan_json(std::vector<logline>& dst,
+                            const line_info& li,
+                            shared_buffer_ref& sbr,
+                            scan_batch_context& sbc);
 
     void update_op_description(
         const std::map<intern_string_t, opid_descriptors>& desc_def,

@@ -39,6 +39,7 @@
 #include <sys/stat.h>
 
 #include "base/auto_fd.hh"
+#include "base/from_trait.hh"
 #include "base/fs_util.hh"
 #include "base/paths.hh"
 #include "base/string_util.hh"
@@ -290,7 +291,8 @@ read_format_int(yajlpp_parse_context* ypc, long long val)
 static int
 read_format_field(yajlpp_parse_context* ypc,
                   const unsigned char* str,
-                  size_t len)
+                  size_t len,
+                  yajl_string_props_t*)
 {
     auto elf = (external_log_format*) ypc->ypc_obj_stack.top();
     auto leading_slash = len > 0 && str[0] == '/';
@@ -309,7 +311,10 @@ read_format_field(yajlpp_parse_context* ypc,
 }
 
 static int
-read_levels(yajlpp_parse_context* ypc, const unsigned char* str, size_t len)
+read_levels(yajlpp_parse_context* ypc,
+            const unsigned char* str,
+            size_t len,
+            yajl_string_props_t*)
 {
     auto elf = (external_log_format*) ypc->ypc_obj_stack.top();
     auto regex = std::string((const char*) str, len);
@@ -348,7 +353,10 @@ read_level_int(yajlpp_parse_context* ypc, long long val)
 }
 
 static int
-read_action_def(yajlpp_parse_context* ypc, const unsigned char* str, size_t len)
+read_action_def(yajlpp_parse_context* ypc,
+                const unsigned char* str,
+                size_t len,
+                yajl_string_props_t*)
 {
     auto elf = (external_log_format*) ypc->ypc_obj_stack.top();
     auto action_name = ypc->get_path_fragment(2);
@@ -376,7 +384,10 @@ read_action_bool(yajlpp_parse_context* ypc, int val)
 }
 
 static int
-read_action_cmd(yajlpp_parse_context* ypc, const unsigned char* str, size_t len)
+read_action_cmd(yajlpp_parse_context* ypc,
+                const unsigned char* str,
+                size_t len,
+                yajl_string_props_t*)
 {
     auto elf = (external_log_format*) ypc->ypc_obj_stack.top();
     auto action_name = ypc->get_path_fragment(2);
@@ -389,7 +400,7 @@ read_action_cmd(yajlpp_parse_context* ypc, const unsigned char* str, size_t len)
     return 1;
 }
 
-static external_log_format::sample&
+static external_log_format::sample_t&
 ensure_sample(external_log_format* elf, int index)
 {
     elf->elf_samples.resize(index + 1);
@@ -397,7 +408,7 @@ ensure_sample(external_log_format* elf, int index)
     return elf->elf_samples[index];
 }
 
-static external_log_format::sample*
+static external_log_format::sample_t*
 sample_provider(const yajlpp_provider_context& ypc, external_log_format* elf)
 {
     auto& sample = ensure_sample(elf, ypc.ypc_index);
@@ -408,7 +419,8 @@ sample_provider(const yajlpp_provider_context& ypc, external_log_format* elf)
 static int
 read_json_constant(yajlpp_parse_context* ypc,
                    const unsigned char* str,
-                   size_t len)
+                   size_t len,
+                   yajl_string_props_t*)
 {
     auto val = std::string((const char*) str, len);
     auto elf = (external_log_format*) ypc->ypc_obj_stack.top();
@@ -697,17 +709,17 @@ static const struct json_path_container sample_handlers = {
     yajlpp::property_handler("description")
         .with_synopsis("<text>")
         .with_description("A description of this sample.")
-        .for_field(&external_log_format::sample::s_description),
+        .for_field(&external_log_format::sample_t::s_description),
     yajlpp::property_handler("line")
         .with_synopsis("<log-line>")
         .with_description(
             "A sample log line that should match a pattern in this format.")
-        .for_field(&external_log_format::sample::s_line),
+        .for_field(&external_log_format::sample_t::s_line),
 
     yajlpp::property_handler("level")
         .with_enum_values(LEVEL_ENUM)
         .with_description("The expected level for this sample log line.")
-        .for_field(&external_log_format::sample::s_level),
+        .for_field(&external_log_format::sample_t::s_level),
 };
 
 static const json_path_handler_base::enum_value_t TYPE_ENUM[] = {
@@ -1103,7 +1115,10 @@ const struct json_path_container format_handlers = {
 };
 
 static int
-read_id(yajlpp_parse_context* ypc, const unsigned char* str, size_t len)
+read_id(yajlpp_parse_context* ypc,
+        const unsigned char* str,
+        size_t len,
+        yajl_string_props_t*)
 {
     auto* ud = static_cast<loader_userdata*>(ypc->ypc_userdata);
     auto file_id = std::string((const char*) str, len);
@@ -1151,8 +1166,27 @@ write_sample_file()
         auto sample_path = lnav::paths::dotlnav()
             / fmt::format(FMT_STRING("formats/default/{}.sample"),
                           bsf.get_name());
+
+        auto stat_res = lnav::filesystem::stat_file(sample_path);
+        if (stat_res.isOk()) {
+            auto st = stat_res.unwrap();
+            if (st.st_mtime >= lnav::filesystem::self_mtime()) {
+                log_debug("skipping writing sample: %s (mtimes %d >= %d)",
+                          bsf.get_name(),
+                          st.st_mtime,
+                          lnav::filesystem::self_mtime());
+                continue;
+            }
+            log_debug("sample file needs to be updated: %s", bsf.get_name());
+        } else {
+            log_debug("sample file does not exist: %s", bsf.get_name());
+        }
+
         auto sfp = bsf.to_string_fragment_producer();
-        auto write_res = lnav::filesystem::write_file(sample_path, *sfp);
+        auto write_res = lnav::filesystem::write_file(
+            sample_path,
+            *sfp,
+            {lnav::filesystem::write_file_options::read_only});
 
         if (write_res.isErr()) {
             auto msg = write_res.unwrapErr();
@@ -1166,9 +1200,22 @@ write_sample_file()
     for (const auto& bsf : lnav_sh_scripts) {
         auto sh_path = lnav::paths::dotlnav()
             / fmt::format(FMT_STRING("formats/default/{}"), bsf.get_name());
+        auto stat_res = lnav::filesystem::stat_file(sh_path);
+        if (stat_res.isOk()) {
+            auto st = stat_res.unwrap();
+            if (st.st_mtime >= lnav::filesystem::self_mtime()) {
+                continue;
+            }
+        }
+
         auto sfp = bsf.to_string_fragment_producer();
         auto write_res = lnav::filesystem::write_file(
-            sh_path, *sfp, {lnav::filesystem::write_file_options::executable});
+            sh_path,
+            *sfp,
+            {
+                lnav::filesystem::write_file_options::executable,
+                lnav::filesystem::write_file_options::read_only,
+            });
 
         if (write_res.isErr()) {
             auto msg = write_res.unwrapErr();
@@ -1180,23 +1227,29 @@ write_sample_file()
     }
 
     for (const auto& bsf : lnav_scripts) {
-        struct script_metadata meta;
+        script_metadata meta;
         auto sf = bsf.to_string_fragment_producer()->to_string();
 
+        meta.sm_name = bsf.get_name();
         extract_metadata(sf, meta);
         auto path
             = fmt::format(FMT_STRING("formats/default/{}.lnav"), meta.sm_name);
         auto script_path = lnav::paths::dotlnav() / path;
         auto stat_res = lnav::filesystem::stat_file(script_path);
-        if (stat_res.isOk() && stat_res.unwrap().st_size == sf.length()) {
-            // Assume it's the right contents and move on...
-            continue;
+        if (stat_res.isOk()) {
+            auto st = stat_res.unwrap();
+            if (st.st_mtime >= lnav::filesystem::self_mtime()) {
+                continue;
+            }
         }
 
         auto write_res = lnav::filesystem::write_file(
             script_path,
             sf,
-            {lnav::filesystem::write_file_options::executable});
+            {
+                lnav::filesystem::write_file_options::executable,
+                lnav::filesystem::write_file_options::read_only,
+            });
         if (write_res.isErr()) {
             fprintf(stderr,
                     "error:unable to write default script file: %s -- %s\n",
@@ -1210,7 +1263,7 @@ static void
 format_error_reporter(const yajlpp_parse_context& ypc,
                       const lnav::console::user_message& msg)
 {
-    struct loader_userdata* ud = (loader_userdata*) ypc.ypc_userdata;
+    auto* ud = (loader_userdata*) ypc.ypc_userdata;
 
     ud->ud_errors->emplace_back(msg);
 }
@@ -1220,7 +1273,7 @@ load_format_file(const std::filesystem::path& filename,
                  std::vector<lnav::console::user_message>& errors)
 {
     std::vector<intern_string_t> retval;
-    struct loader_userdata ud;
+    loader_userdata ud;
     auto_fd fd;
 
     log_info("loading formats from file: %s", filename.c_str());
@@ -1505,12 +1558,14 @@ load_format_extra(sqlite3* db,
 }
 
 static void
-extract_metadata(string_fragment contents, struct script_metadata& meta_out)
+extract_metadata(string_fragment contents, script_metadata& meta_out)
 {
     static const auto SYNO_RE = lnav::pcre2pp::code::from_const(
         "^#\\s+@synopsis:(.*)$", PCRE2_MULTILINE);
     static const auto DESC_RE = lnav::pcre2pp::code::from_const(
         "^#\\s+@description:(.*)$", PCRE2_MULTILINE);
+    static const auto OUTPUT_FORMAT_RE = lnav::pcre2pp::code::from_const(
+        "^#\\s+@output-format:\\s+(.*)$", PCRE2_MULTILINE);
 
     auto syno_md = SYNO_RE.create_match_data();
     auto syno_match_res
@@ -1523,6 +1578,29 @@ extract_metadata(string_fragment contents, struct script_metadata& meta_out)
         = DESC_RE.capture_from(contents).into(desc_md).matches().ignore_error();
     if (desc_match_res) {
         meta_out.sm_description = desc_md[1]->trim().to_string();
+    }
+
+    auto out_format_md = OUTPUT_FORMAT_RE.create_match_data();
+    auto out_format_res = OUTPUT_FORMAT_RE.capture_from(contents)
+                              .into(out_format_md)
+                              .matches()
+                              .ignore_error();
+    if (out_format_res) {
+        auto out_format_frag = out_format_md[1]->trim();
+        auto from_res = from<text_format_t>(out_format_frag);
+        if (from_res.isErr()) {
+            log_error("%s (%s): invalid @output-format '%.*s'",
+                      meta_out.sm_name.c_str(),
+                      meta_out.sm_path.c_str(),
+                      out_format_frag.length(),
+                      out_format_frag.data());
+        } else {
+            meta_out.sm_output_format = from_res.unwrap();
+            log_info("%s (%s): setting output format to %d",
+                     meta_out.sm_name.c_str(),
+                     meta_out.sm_path.c_str(),
+                     meta_out.sm_output_format);
+        }
     }
 
     if (!meta_out.sm_synopsis.empty()) {

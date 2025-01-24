@@ -90,7 +90,7 @@ builtin-sh-scripts.cc: $(BIN2C_PATH) $(BUILTIN_SHSCRIPTS)
 
 include time_formats.am
 
-time_fmts.cc: ptimec$(BUILD_EXEEXT)
+time_fmts.cc: ptimec$(BUILD_EXEEXT) time_formats.am
 	$(PTIME_V)./ptimec$(BUILD_EXEEXT) $(TIME_FORMATS) > $@
 
 if HAVE_RE2C
@@ -265,6 +265,7 @@ noinst_HEADERS = \
 	help_text_formatter.hh \
 	highlighter.hh \
 	hist_source.hh \
+	hist_source_T.hh \
 	hotkeys.hh \
 	init.sql \
 	input_dispatcher.hh \
@@ -307,8 +308,10 @@ noinst_HEADERS = \
 	mapbox/variant_visitor.hpp \
 	md2attr_line.hh \
 	md4cpp.hh \
+	piper.header.hh \
 	piper.looper.hh \
 	piper.looper.cfg.hh \
+	piper.match.hh \
 	plain_text_source.hh \
 	pollable.hh \
 	pretty_printer.hh \
@@ -353,7 +356,6 @@ noinst_HEADERS = \
 	term_extra.hh \
 	text_anonymizer.hh \
 	text_format.hh \
-	text_link_handler.hh \
 	text_overlay_menu.hh \
 	textfile_highlighters.hh \
 	textfile_sub_source.hh \
@@ -484,7 +486,9 @@ libdiag_a_SOURCES = \
 	md4cpp.cc \
 	network-extension-functions.cc \
 	data_parser.cc \
+	piper.header.cc \
 	piper.looper.cc \
+	piper.match.cc \
 	plain_text_source.cc \
 	pollable.cc \
 	pretty_printer.cc \
@@ -511,7 +515,6 @@ libdiag_a_SOURCES = \
 	styling.cc \
 	text_anonymizer.cc \
 	text_format.cc \
-	text_link_handler.cc \
 	text_overlay_menu.cc \
 	textfile_sub_source.cc \
 	timer.cc \
@@ -556,11 +559,11 @@ lnav_test_SOURCES = \
     $(PLUGIN_SRCS)
 
 if CROSS_COMPILING
-ptimec$(BUILD_EXEEXT): ptimec.c
-	$(AM_V_CC) $(CC_FOR_BUILD) $(CPPFLAGS_FOR_BUILD) $(LDFLAGS_FOR_BUILD) -g3 -o $@ $? -fPIE
+ptimec$(BUILD_EXEEXT): ptimec.cc
+	$(AM_V_CXX) $(CXX_FOR_BUILD) $(CPPFLAGS_FOR_BUILD) $(LDFLAGS_FOR_BUILD) -g3 -o $@ $? -fPIE
 else
-ptimec$(BUILD_EXEEXT): ptimec.c
-	$(AM_V_CC) $(CC) $(CPPFLAGS) $(LDFLAGS) -g3 -o $@ $? -fPIE
+ptimec$(BUILD_EXEEXT): ptimec.cc
+	$(AM_V_CXX) $(CXX) $(CPPFLAGS) $(LDFLAGS) -g3 -o $@ $? -fPIE
 endif
 
 if HAVE_RE2C
@@ -572,7 +575,7 @@ EXTRA_DIST = \
     third-party/prqlc-c/Cargo.toml \
     third-party/prqlc-c/cbindgen.toml \
     third-party/prqlc-c/src/lib.rs \
-	ptimec.c
+	ptimec.cc
 
 CLEANFILES = \
 	ptimec$(BUILD_EXEEXT)

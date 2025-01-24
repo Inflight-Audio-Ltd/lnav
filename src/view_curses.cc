@@ -37,15 +37,19 @@
 #include <cmath>
 #include <string>
 
+#include <zlib.h>
+
 #include "base/ansi_scrubber.hh"
 #include "base/attr_line.hh"
 #include "base/from_trait.hh"
 #include "base/injector.hh"
+#include "base/itertools.enumerate.hh"
 #include "base/itertools.hh"
 #include "base/lnav_log.hh"
 #include "config.h"
 #include "lnav_config.hh"
 #include "shlex.hh"
+#include "uniwidth.h"
 #include "view_curses.hh"
 #include "xterm_mouse.hh"
 
@@ -323,8 +327,11 @@ view_curses::mvwattrline(ncplane* window,
                     lpc = lpc_start + 1;
                 } else {
                     auto wch = read_res.unwrap();
-                    auto wcw_res = wcwidth(wch);
+                    auto wcw_res = uc_width(wch, "UTF-8");
                     if (wcw_res < 0) {
+                        log_trace(
+                            "uc_width(%x) does not recognize width character",
+                            wch);
                         wcw_res = 1;
                     }
                     if (lpc > (lpc_start + 1)) {
@@ -444,7 +451,6 @@ view_curses::mvwattrline(ncplane* window,
         if (attr_range.lr_start < attr_range.lr_end) {
             auto attrs = text_attrs{};
             std::optional<const char*> graphic;
-            std::optional<wchar_t> block_elem;
 
             if (iter->sa_type == &VC_GRAPHIC) {
                 graphic = iter->sa_value.get<const char*>();
@@ -456,13 +462,13 @@ view_curses::mvwattrline(ncplane* window,
                 }
             } else if (iter->sa_type == &VC_BLOCK_ELEM) {
                 auto be = iter->sa_value.get<block_elem_t>();
-                block_elem = be.value;
+                ncplane_putwc_yx(window, y, x + attr_range.lr_start, be.value);
                 attrs = vc.attrs_for_role(be.role);
             } else if (iter->sa_type == &VC_ICON) {
                 auto ic = iter->sa_value.get<ui_icon_t>();
                 auto be = vc.wchar_for_icon(ic);
 
-                block_elem = be.value;
+                ncplane_putwc_yx(window, y, x + attr_range.lr_start, be.value);
                 attrs = vc.attrs_for_role(be.role);
             } else if (iter->sa_type == &VC_STYLE) {
                 attrs = iter->sa_value.get<text_attrs>();
@@ -484,7 +490,7 @@ view_curses::mvwattrline(ncplane* window,
                 attrs.ta_fg_color = role_attrs.ta_fg_color;
             }
 
-            if (graphic || block_elem || !attrs.empty()) {
+            if (graphic || !attrs.empty()) {
                 if (attrs.ta_fg_color.cu_value.is<styling::semantic>()) {
                     attrs.ta_fg_color
                         = vc.color_for_ident(al.to_string_fragment(iter));
@@ -774,11 +780,16 @@ view_colors::match_color(styling::color_unit cu) const
     }
 
     if (cu.cu_value.is<rgb_color>()) {
-        log_info("matching RGB to palette");
-        auto lab = lab_color{cu.cu_value.get<rgb_color>()};
+        auto rgb = cu.cu_value.get<rgb_color>();
+        auto lab = lab_color{rgb};
+        auto pal = vc_active_palette->match_color(lab);
 
-        return styling::color_unit::from_palette(
-            palette_color{vc_active_palette->match_color(lab)});
+        log_trace("mapped RGB (%d, %d, %d) to palette %d",
+                  rgb.rc_r,
+                  rgb.rc_g,
+                  rgb.rc_b,
+                  pal);
+        return styling::color_unit::from_palette(palette_color{pal});
     }
 
     return cu;
@@ -838,22 +849,6 @@ view_colors::to_attrs(const lnav_theme& lt,
     fg = this->match_color(fg);
     bg = this->match_color(bg);
 
-    log_debug("pp %s fg color %s", pp_sc.pp_path.c_str(), fg_color.c_str());
-    fg.cu_value.match(
-        [](styling::transparent) { log_debug("  trans"); },
-        [](styling::semantic) { log_debug("  semantic"); },
-        [](const palette_color& pc) { log_debug("  palette %d", pc); },
-        [](const rgb_color& rc) {
-            log_debug("  rgb %d %d %d", rc.rc_r, rc.rc_g, rc.rc_b);
-        });
-    log_debug("pp %s bg color %s", pp_sc.pp_path.c_str(), bg_color.c_str());
-    bg.cu_value.match(
-        [](styling::transparent) { log_debug("  trans"); },
-        [](styling::semantic) { log_debug("  semantic"); },
-        [](const palette_color& pc) { log_debug("  palette %d", pc); },
-        [](const rgb_color& rc) {
-            log_debug("  rgb %d %d %d", rc.rc_r, rc.rc_g, rc.rc_b);
-        });
     auto retval1 = text_attrs{0, fg, bg};
     text_attrs retval2;
 
@@ -864,6 +859,14 @@ view_colors::to_attrs(const lnav_theme& lt,
     if (sc.sc_bold) {
         retval1 |= text_attrs::style::bold;
         retval2 |= text_attrs::style::bold;
+    }
+    if (sc.sc_italic) {
+        retval1 |= text_attrs::style::italic;
+        retval2 |= text_attrs::style::italic;
+    }
+    if (sc.sc_strike) {
+        retval1 |= text_attrs::style::struck;
+        retval2 |= text_attrs::style::struck;
     }
 
     return {retval1, retval2, role_class};
@@ -877,21 +880,48 @@ view_colors::init_roles(const lnav_theme& lt,
     rgb_color fg, bg;
     std::string err;
 
+    size_t icon_index = 0;
+    for (const auto& ic : {
+             lt.lt_icon_hidden,
+             lt.lt_icon_ok,
+             lt.lt_icon_info,
+             lt.lt_icon_warning,
+             lt.lt_icon_error,
+         })
     {
         size_t index = 0;
-        if (lt.lt_icon_hidden.pp_value.ic_value) {
-            auto read_res = ww898::utf::utf8::read([&lt, &index]() {
-                return lt.lt_icon_hidden.pp_value.ic_value.value()[index++];
+        if (ic.pp_value.ic_value) {
+            auto read_res = ww898::utf::utf8::read([&ic, &index]() {
+                return ic.pp_value.ic_value.value()[index++];
             });
             if (read_res.isErr()) {
-                reporter(&lt.lt_icon_hidden,
-                         lnav::console::user_message::error("bad"));
+                reporter(&ic,
+                         lnav::console::user_message::error(
+                             "icon is not valid UTF-8"));
             } else if (read_res.unwrap() != 0) {
-                this->vc_icons[lnav::enums::to_underlying(ui_icon_t::hidden)]
-                    = block_elem_t{(wchar_t) read_res.unwrap(),
-                                   role_t::VCR_HIDDEN};
+                role_t icon_role;
+                switch (static_cast<ui_icon_t>(icon_index)) {
+                    case ui_icon_t::hidden:
+                        icon_role = role_t::VCR_HIDDEN;
+                        break;
+                    case ui_icon_t::ok:
+                        icon_role = role_t::VCR_OK;
+                        break;
+                    case ui_icon_t::info:
+                        icon_role = role_t::VCR_INFO;
+                        break;
+                    case ui_icon_t::warning:
+                        icon_role = role_t::VCR_WARNING;
+                        break;
+                    case ui_icon_t::error:
+                        icon_role = role_t::VCR_ERROR;
+                        break;
+                }
+                this->vc_icons[icon_index]
+                    = block_elem_t{(wchar_t) read_res.unwrap(), icon_role};
             }
         }
+        icon_index += 1;
     }
 
     /* Setup the mappings from roles to actual colors. */
@@ -1311,4 +1341,9 @@ screen_curses::create(const notcurses_options& options)
              notcurses_detected_terminal(nc));
 
     return Ok(screen_curses(nc));
+}
+
+screen_curses::screen_curses(screen_curses&& other) noexcept
+    : sc_notcurses(std::exchange(other.sc_notcurses, nullptr))
+{
 }

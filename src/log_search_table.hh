@@ -37,7 +37,6 @@
 
 #include "log_vtab_impl.hh"
 #include "pcrepp/pcre2pp.hh"
-#include "shared_buffer.hh"
 
 class log_search_table : public log_vtab_impl {
 public:
@@ -56,7 +55,7 @@ public:
 
     void filter(log_cursor& lc, logfile_sub_source& lss) override;
 
-    void get_foreign_keys(std::vector<std::string>& keys_inout) const override;
+    void get_foreign_keys(std::unordered_set<std::string>& keys_inout) const override;
 
     bool next(log_cursor& lc, logfile_sub_source& lss) override;
 

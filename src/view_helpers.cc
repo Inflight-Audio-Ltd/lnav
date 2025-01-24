@@ -1009,8 +1009,8 @@ execute_example(std::unordered_map<std::string, attr_line_t>& res_map,
         return;
     }
 
-    auto& dls = lnav_data.ld_db_row_source;
-    auto& dos = lnav_data.ld_db_overlay;
+    auto& dls = lnav_data.ld_db_example_row_source;
+    auto& dos = lnav_data.ld_db_example_overlay;
     auto& db_tc = lnav_data.ld_views[LNV_DB];
 
     for (const auto& [index, ex] : lnav::itertools::enumerate(ht.ht_example, 1)) {
@@ -1068,6 +1068,7 @@ execute_example(std::unordered_map<std::string, attr_line_t>& res_map,
                 log_trace("example: %s", ex.he_cmd);
                 log_trace("example result: %s", result.get_string().c_str());
 
+                scrub_ansi_string(result.al_string, &result.al_attrs);
                 res_map.emplace(ex.he_cmd, std::move(result));
                 break;
             }
@@ -1128,11 +1129,7 @@ eval_example(const help_text& ht, const help_example& ex)
 
         switch (ht.ht_context) {
             default: {
-                auto& dls = lnav_data.ld_db_row_source;
-                auto old_width = dls.dls_max_column_width;
-                dls.dls_max_column_width = 15;
                 execute_example(*res_map, ht);
-                dls.dls_max_column_width = old_width;
                 break;
             }
         }
@@ -1619,13 +1616,18 @@ lnav_behavior::mouse_event(
 
     auto width = ncplane_dim_x(lnav_data.ld_window);
 
-    me.me_press_x = this->lb_last_event.me_press_x;
-    me.me_press_y = this->lb_last_event.me_press_y;
-    me.me_x = x - 1;
+    me.me_x = x;
     if (me.me_x >= width) {
         me.me_x = width - 1;
     }
     me.me_y = y - 1;
+    if (me.me_state == mouse_button_state_t::BUTTON_STATE_PRESSED) {
+        me.me_press_x = me.me_x;
+        me.me_press_y = me.me_y;
+    } else {
+        me.me_press_x = this->lb_last_event.me_press_x;
+        me.me_press_y = this->lb_last_event.me_press_y;
+    }
 
     switch (me.me_state) {
         case mouse_button_state_t::BUTTON_STATE_PRESSED:

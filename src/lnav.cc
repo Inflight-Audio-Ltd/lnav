@@ -112,7 +112,7 @@
 #include "readline_curses.hh"
 #include "readline_highlighters.hh"
 #include "regexp_vtab.hh"
-#include "scn/scn.h"
+#include "scn/scan.h"
 #include "service_tags.hh"
 #include "session_data.hh"
 #include "spectro_source.hh"
@@ -226,14 +226,14 @@ const std::vector<std::string> lnav_zoom_strings = {
     "1-week",
 };
 
-static const std::vector<std::string> DEFAULT_DB_KEY_NAMES = {
+static const std::unordered_set<std::string> DEFAULT_DB_KEY_NAMES = {
     "$id",         "capture_count", "capture_index",
     "device",      "enabled",       "filter_id",
     "id",          "inode",         "key",
     "match_index", "parent",        "range_start",
     "range_stop",  "rowid",         "st_dev",
     "st_gid",      "st_ino",        "st_mode",
-    "st_rdev",     "st_uid",
+    "st_rdev",     "st_uid",        "pattern",
 };
 
 static auto bound_pollable_supervisor
@@ -342,8 +342,6 @@ setup_logline_table(exec_context& ec)
     for (const auto& iter : *lnav_data.ld_vtab_manager) {
         iter.second->get_foreign_keys(db_key_names);
     }
-
-    stable_sort(db_key_names.begin(), db_key_names.end());
 
     return retval;
 }
@@ -1029,7 +1027,9 @@ check_for_file_zones()
             without_tz_files.emplace_back(lf->get_unique_path());
         }
     }
-    if (with_tz_count > 0 && !without_tz_files.empty()) {
+    if (with_tz_count > 0 && !without_tz_files.empty()
+        && !lnav_data.ld_exec_context.ec_msg_callback_stack.empty())
+    {
         const auto note
             = attr_line_t("The file(s) without a zone: ")
                   .join(without_tz_files, VC_ROLE.value(role_t::VCR_FILE), ", ")
@@ -1050,7 +1050,56 @@ check_for_file_zones()
                               "that do not include a zone in the timestamp"))
                   .move();
 
-        lnav_data.ld_exec_context.ec_error_callback_stack.back()(um);
+        lnav_data.ld_exec_context.ec_msg_callback_stack.back()(um);
+    }
+}
+
+static void
+ui_execute_init_commands(
+    exec_context& ec,
+    std::vector<std::pair<Result<std::string, lnav::console::user_message>,
+                          std::string>>& cmd_results)
+{
+    std::error_code errc;
+    std::filesystem::create_directories(lnav::paths::workdir(), errc);
+    auto open_temp_res = lnav::filesystem::open_temp_file(lnav::paths::workdir()
+                                                          / "exec.XXXXXX");
+
+    if (open_temp_res.isErr()) {
+        lnav_data.ld_rl_view->set_value(
+            fmt::format(FMT_STRING("Unable to open temporary output file: {}"),
+                        open_temp_res.unwrapErr()));
+    } else {
+        auto tmp_pair = open_temp_res.unwrap();
+        auto fd_copy = tmp_pair.second.dup();
+        auto tf = text_format_t::TF_UNKNOWN;
+
+        {
+            exec_context::output_guard og(
+                ec,
+                "tmp",
+                std::make_pair(fdopen(tmp_pair.second.release(), "w"), fclose));
+            execute_init_commands(ec, cmd_results);
+            tf = ec.ec_output_stack.back().od_format;
+        }
+
+        struct stat st;
+        if (fstat(fd_copy, &st) != -1 && st.st_size > 0) {
+            static const auto OUTPUT_NAME
+                = std::string("Initial command output");
+            lnav_data.ld_active_files.fc_file_names[tmp_pair.first]
+                .with_filename(OUTPUT_NAME)
+                .with_include_in_session(false)
+                .with_detect_format(false)
+                .with_text_format(tf)
+                .with_init_location(0_vl);
+            lnav_data.ld_files_to_front.emplace_back(OUTPUT_NAME, 0_vl);
+
+            if (lnav_data.ld_rl_view != nullptr) {
+                lnav_data.ld_rl_view->set_alt_value(
+                    HELP_MSG_1(X, "to close the file"));
+            }
+        }
     }
 }
 
@@ -1216,6 +1265,7 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
         auto _ign_signal = finally([] {
             signal(SIGWINCH, SIG_IGN);
             lnav_data.ld_winched = false;
+            lnav_data.ld_window = nullptr;
         });
 
         auto_fd errpipe[2];
@@ -1226,10 +1276,9 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
         auto pipe_err_handle
             = log_pipe_err(errpipe[0].release(), errpipe[1].release());
 
-        notcurses_options nco;
-        memset(&nco, 0, sizeof(nco));
+        notcurses_options nco = {};
         nco.flags |= NCOPTION_SUPPRESS_BANNERS | NCOPTION_NO_WINCH_SIGHANDLER;
-        nco.loglevel = NCLOGLEVEL_DEBUG;
+        nco.loglevel = NCLOGLEVEL_PANIC;
         auto create_screen_res = screen_curses::create(nco);
 
         if (create_screen_res.isErr()) {
@@ -1244,31 +1293,44 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
 
         auto sc = create_screen_res.unwrap();
         auto inputready_fd = notcurses_inputready_fd(sc.get_notcurses());
+        auto& mouse_i = injector::get<xterm_mouse&>();
 
-        ec.ec_ui_callbacks.uc_pre_stdout_write = [&sc]() {
-            notcurses_leave_alternate_screen(sc.get_notcurses());
+        auto ui_cb_mouse = false;
+        ec.ec_ui_callbacks.uc_pre_stdout_write
+            = [&sc, &mouse_i, &ui_cb_mouse]() {
+                  ui_cb_mouse = mouse_i.is_enabled();
+                  if (ui_cb_mouse) {
+                      mouse_i.set_enabled(sc.get_notcurses(), false);
+                  }
+                  notcurses_leave_alternate_screen(sc.get_notcurses());
 
-            // notcurses sets stdio to non-blocking, which can cause an issue
-            // when writing since there is a chance of an EAGAIN happening
-            const auto fl = fcntl(STDOUT_FILENO, F_GETFL, 0);
-            fcntl(STDOUT_FILENO, F_SETFL, fl & ~O_NONBLOCK);
-        };
-        ec.ec_ui_callbacks.uc_post_stdout_write = [&sc]() {
-            const auto fl = fcntl(STDOUT_FILENO, F_GETFL, 0);
-            fcntl(STDOUT_FILENO, F_SETFL, fl | O_NONBLOCK);
+                  // notcurses sets stdio to non-blocking, which can cause an
+                  // issue when writing since there is a chance of an EAGAIN
+                  // happening
+                  const auto fl = fcntl(STDOUT_FILENO, F_GETFL, 0);
+                  fcntl(STDOUT_FILENO, F_SETFL, fl & ~O_NONBLOCK);
+              };
+        ec.ec_ui_callbacks.uc_post_stdout_write
+            = [&sc, &mouse_i, &ui_cb_mouse]() {
+                  const auto fl = fcntl(STDOUT_FILENO, F_GETFL, 0);
+                  fcntl(STDOUT_FILENO, F_SETFL, fl | O_NONBLOCK);
 
-            auto nci = ncinput{};
-            do {
-                notcurses_get_blocking(sc.get_notcurses(), &nci);
-            } while (nci.evtype == NCTYPE_RELEASE || ncinput_lock_p(&nci)
-                     || ncinput_modifier_p(&nci));
-            notcurses_enter_alternate_screen(sc.get_notcurses());
-            notcurses_refresh(sc.get_notcurses(), nullptr, nullptr);
-            // XXX doing this refresh twice since it doesn't seem to be enough
-            // to do it once...
-            notcurses_render(sc.get_notcurses());
-            notcurses_refresh(sc.get_notcurses(), nullptr, nullptr);
-        };
+                  auto nci = ncinput{};
+                  do {
+                      notcurses_get_blocking(sc.get_notcurses(), &nci);
+                  } while (nci.evtype == NCTYPE_RELEASE || ncinput_lock_p(&nci)
+                           || ncinput_modifier_p(&nci));
+                  notcurses_enter_alternate_screen(sc.get_notcurses());
+
+                  if (ui_cb_mouse) {
+                      mouse_i.set_enabled(sc.get_notcurses(), true);
+                  }
+                  notcurses_refresh(sc.get_notcurses(), nullptr, nullptr);
+                  // XXX doing this refresh twice since it doesn't seem to be
+                  // enough to do it once...
+                  notcurses_render(sc.get_notcurses());
+                  notcurses_refresh(sc.get_notcurses(), nullptr, nullptr);
+              };
         ec.ec_ui_callbacks.uc_redraw = [&sc]() {
             notcurses_refresh(sc.get_notcurses(), nullptr, nullptr);
         };
@@ -1276,8 +1338,6 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
         lnav_behavior lb;
 
         ui_periodic_timer::singleton();
-
-        auto& mouse_i = injector::get<xterm_mouse&>();
 
         mouse_i.set_behavior(&lb);
         mouse_i.set_enabled(
@@ -1301,7 +1361,7 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
         view_colors::init(sc.get_notcurses());
 
         auto ecb_guard
-            = lnav_data.ld_exec_context.add_error_callback([](const auto& um) {
+            = lnav_data.ld_exec_context.add_msg_callback([](const auto& um) {
                   auto al = um.to_attr_line().rtrim();
 
                   if (al.get_string().find('\n') == std::string::npos) {
@@ -1387,6 +1447,17 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
 
             if (top_view && *top_view == &tc) {
                 lnav_data.ld_bottom_source.update_search_term(tc);
+            }
+            if (!lnav_data.ld_rl_view->is_active()) {
+                auto search_duration = tc.consume_search_duration();
+                if (search_duration) {
+                    double secs = search_duration->count() / 1000.0;
+                    lnav_data.ld_rl_view->set_attr_value(
+                        attr_line_t("search completed in ")
+                            .append(lnav::roles::number(
+                                fmt::format(FMT_STRING("{:.3}"), secs)))
+                            .append(" seconds"));
+                }
             }
         };
         for (lpc = 0; lpc < LNV__MAX; lpc++) {
@@ -1715,7 +1786,9 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
             if (initial_rescan_completed) {
                 if (ui_now >= next_rebuild_time) {
                     auto text_file_count = lnav_data.ld_text_source.size();
+                    // log_debug("BEGIN rebuild");
                     auto rebuild_res = rebuild_indexes(loop_deadline);
+                    // log_debug("END rebuild");
                     changes += rebuild_res.rir_changes;
                     if (!changes && ui_clock::now() < loop_deadline) {
                         next_rebuild_time = ui_clock::now() + 333ms;
@@ -2016,7 +2089,7 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                         std::string>>
                         cmd_results;
 
-                    execute_init_commands(ec, cmd_results);
+                    ui_execute_init_commands(ec, cmd_results);
 
                     if (!cmd_results.empty()) {
                         auto last_cmd_result = cmd_results.back();
@@ -2025,7 +2098,7 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                             lnav_data.ld_rl_view->set_value(
                                 last_cmd_result.first.unwrap());
                         } else {
-                            ec.ec_error_callback_stack.back()(
+                            ec.ec_msg_callback_stack.back()(
                                 last_cmd_result.first.unwrapErr());
                         }
                         lnav_data.ld_rl_view->set_alt_value(
@@ -2405,9 +2478,6 @@ main(int argc, char* argv[])
     rl_readline_name = "lnav";
     lnav_data.ld_db_key_names = DEFAULT_DB_KEY_NAMES;
 
-    stable_sort(lnav_data.ld_db_key_names.begin(),
-                lnav_data.ld_db_key_names.end());
-
     auto dot_lnav_path = lnav::paths::dotlnav();
     std::error_code last_write_ec;
     lnav_data.ld_last_dot_lnav_time
@@ -2591,6 +2661,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         auto* file_opt = app.add_option("file", file_args, "files");
 
         auto wait_cb = [](size_t count) {
+            fprintf(stderr, "PID %d waiting for attachment\n", getpid());
             char b;
             if (isatty(STDIN_FILENO) && read(STDIN_FILENO, &b, 1) == -1) {
                 perror("Read key from STDIN");
@@ -2787,6 +2858,40 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                 if (!install_from_git(file_path)) {
                     return EXIT_FAILURE;
                 }
+                continue;
+            }
+
+            if (endswith(file_path, ".lnav")) {
+                auto script_path = std::filesystem::path(file_path);
+                auto read_res = lnav::filesystem::read_file(script_path);
+                if (read_res.isErr()) {
+                    lnav::console::print(
+                        stderr,
+                        lnav::console::user_message::error(
+                            attr_line_t("unable to read script file: ")
+                                .append(lnav::roles::file(file_path)))
+                            .with_reason(read_res.unwrapErr()));
+                    return EXIT_FAILURE;
+                }
+
+                auto dst_path = formats_installed_path / script_path.filename();
+                auto write_res
+                    = lnav::filesystem::write_file(dst_path, read_res.unwrap());
+                if (write_res.isErr()) {
+                    lnav::console::print(
+                        stderr,
+                        lnav::console::user_message::error(
+                            attr_line_t("unable to write script file: ")
+                                .append(lnav::roles::file(file_path)))
+                            .with_reason(write_res.unwrapErr()));
+                    return EXIT_FAILURE;
+                }
+
+                lnav::console::print(
+                    stderr,
+                    lnav::console::user_message::ok(
+                        attr_line_t("installed -- ")
+                            .append(lnav::roles::file(dst_path))));
                 continue;
             }
 
@@ -3002,6 +3107,9 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         .set_sub_source(&lnav_data.ld_hist_source2);
     lnav_data.ld_views[LNV_DB].set_sub_source(&lnav_data.ld_db_row_source);
     lnav_data.ld_db_overlay.dos_labels = &lnav_data.ld_db_row_source;
+    lnav_data.ld_db_example_row_source.dls_max_column_width = 15;
+    lnav_data.ld_db_example_overlay.dos_labels
+        = &lnav_data.ld_db_example_row_source;
     lnav_data.ld_db_preview_overlay_source[0].dos_labels
         = &lnav_data.ld_db_preview_source[0];
     lnav_data.ld_db_preview_overlay_source[1].dos_labels
@@ -3062,7 +3170,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
     }
 
     {
-        hist_source2& hs = lnav_data.ld_hist_source2;
+        auto& hs = lnav_data.ld_hist_source2;
 
         lnav_data.ld_log_source.set_index_delegate(new hist_index_delegate(
             lnav_data.ld_hist_source2, lnav_data.ld_views[LNV_HISTOGRAM]));
@@ -3125,6 +3233,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
     }
 
     if (mmode_ops) {
+        isc::supervisor root_superv(injector::get<isc::service_list>());
         auto perform_res = lnav::management::perform(mmode_ops);
 
         return print_user_msgs(perform_res, mode_flags);
@@ -3174,7 +3283,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         }
     }
 
-    if (file_args.empty()) {
+    if (file_args.empty() && !mode_flags.mf_no_default) {
         load_stdin = true;
     }
 
@@ -3186,14 +3295,15 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
 
         auto colon_index = file_path_str.rfind(':');
         if (colon_index != std::string::npos) {
-            auto top_range = scn::string_view{&file_path_str[colon_index + 1],
-                                              &(*file_path_str.cend())};
+            auto top_range
+                = std::string_view{&file_path_str[colon_index + 1],
+                                   file_path_str.size() - colon_index - 1};
             auto scan_res = scn::scan_value<int>(top_range);
 
             if (scan_res) {
                 file_path_without_trailer
                     = file_path_str.substr(0, colon_index);
-                file_loc = vis_line_t(scan_res.value());
+                file_loc = vis_line_t(scan_res->value());
             } else {
                 log_info(
                     "did not parse line number from file path with colon: %s",
@@ -3442,7 +3552,9 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         }
     }
 
-    if (!isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+    if (!isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)
+        && !(lnav_data.ld_flags & LNF_HEADLESS))
+    {
         if (dup2(STDOUT_FILENO, STDIN_FILENO) == -1) {
             perror("cannot dup stdout to stdin");
         }
@@ -3539,6 +3651,18 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                     cmd_results;
                 textview_curses *log_tc, *text_tc, *tc;
                 bool output_view = true;
+                auto msg_cb_guard = lnav_data.ld_exec_context.add_msg_callback(
+                    [](const auto& um) {
+                        switch (um.um_level) {
+                            case lnav::console::user_message::level::error:
+                            case lnav::console::user_message::level::warning:
+                                lnav::console::println(stderr,
+                                                       um.to_attr_line());
+                                break;
+                            default:
+                                break;
+                        }
+                    });
 
                 log_fos->fos_contexts.top().c_show_applicable_annotations
                     = false;

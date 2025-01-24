@@ -60,6 +60,7 @@
 #include "db_sub_source.hh"
 #include "external_opener.hh"
 #include "field_overlay_source.hh"
+#include "fmt/color.h"
 #include "fmt/printf.h"
 #include "hasher.hh"
 #include "itertools.similar.hh"
@@ -79,12 +80,13 @@
 #include "readline_highlighters.hh"
 #include "readline_possibilities.hh"
 #include "relative_time.hh"
-#include "scn/scn.h"
+#include "scn/scan.h"
 #include "service_tags.hh"
 #include "session.export.hh"
 #include "session_data.hh"
 #include "shlex.hh"
 #include "spectro_impls.hh"
+#include "sql_util.hh"
 #include "sqlite-extension-func.hh"
 #include "sysclip.hh"
 #include "tailer/tailer.looper.hh"
@@ -1651,39 +1653,63 @@ com_save_to(exec_context& ec,
         }
     } else if (args[0] == "write-cols-to" || args[0] == "write-table-to") {
         bool first = true;
+        auto tf = ec.get_output_format();
 
-        fprintf(outfile, "\u250f");
-        for (const auto& hdr : dls.dls_headers) {
-            auto cell_line = repeat("\u2501", hdr.hm_column_size);
+        if (tf != text_format_t::TF_MARKDOWN) {
+            fprintf(outfile, "\u250f");
+            for (const auto& hdr : dls.dls_headers) {
+                auto cell_line = repeat("\u2501", hdr.hm_column_size);
 
-            if (!first) {
-                fprintf(outfile, "\u2533");
+                if (!first) {
+                    fprintf(outfile, "\u2533");
+                }
+                fprintf(outfile, "%s", cell_line.c_str());
+                first = false;
             }
-            fprintf(outfile, "%s", cell_line.c_str());
-            first = false;
+            fprintf(outfile, "\u2513\n");
         }
-        fprintf(outfile, "\u2513\n");
 
         for (const auto& hdr : dls.dls_headers) {
             auto centered_hdr = center_str(hdr.hm_name, hdr.hm_column_size);
+            auto style = fmt::text_style{};
 
-            fprintf(outfile, "\u2503");
-            fprintf(outfile, "%s", centered_hdr.c_str());
+            fprintf(outfile, tf == text_format_t::TF_MARKDOWN ? "|" : "\u2503");
+            if (tf != text_format_t::TF_MARKDOWN) {
+                style |= fmt::emphasis::bold;
+            }
+            fmt::print(outfile, style, FMT_STRING("{}"), centered_hdr);
         }
-        fprintf(outfile, "\u2503\n");
+        fprintf(outfile, tf == text_format_t::TF_MARKDOWN ? "|\n" : "\u2503\n");
 
         first = true;
-        fprintf(outfile, "\u2521");
+        fprintf(outfile, tf == text_format_t::TF_MARKDOWN ? "|" : "\u2521");
         for (const auto& hdr : dls.dls_headers) {
-            auto cell_line = repeat("\u2501", hdr.hm_column_size);
+            auto cell_line
+                = repeat(tf == text_format_t::TF_MARKDOWN ? "-" : "\u2501",
+                         hdr.hm_column_size);
 
+            if (tf == text_format_t::TF_MARKDOWN) {
+                switch (hdr.hm_align) {
+                    case text_align_t::start:
+                        cell_line.front() = ':';
+                        break;
+                    case text_align_t::center:
+                        cell_line.front() = ':';
+                        cell_line.back() = ':';
+                        break;
+                    case text_align_t::end:
+                        cell_line.back() = ':';
+                        break;
+                }
+            }
             if (!first) {
-                fprintf(outfile, "\u2547");
+                fprintf(outfile,
+                        tf == text_format_t::TF_MARKDOWN ? "|" : "\u2547");
             }
             fprintf(outfile, "%s", cell_line.c_str());
             first = false;
         }
-        fprintf(outfile, "\u2529\n");
+        fprintf(outfile, tf == text_format_t::TF_MARKDOWN ? "|\n" : "\u2529\n");
 
         for (size_t row = 0; row < dls.text_line_count(); row++) {
             if (ec.ec_dry_run && row > 10) {
@@ -1693,7 +1719,8 @@ com_save_to(exec_context& ec,
             for (size_t col = 0; col < dls.dls_headers.size(); col++) {
                 const auto& hdr = dls.dls_headers[col];
 
-                fprintf(outfile, "\u2502");
+                fprintf(outfile,
+                        tf == text_format_t::TF_MARKDOWN ? "|" : "\u2502");
 
                 auto cell = std::string(dls.dls_rows[row][col]);
                 if (anonymize) {
@@ -1702,33 +1729,36 @@ com_save_to(exec_context& ec,
                 auto cell_length
                     = utf8_string_length(cell).unwrapOr(cell.size());
                 auto padding = anonymize ? 1 : hdr.hm_column_size - cell_length;
+                auto rjust = hdr.hm_align == text_align_t::end;
 
-                if (hdr.hm_column_type != SQLITE3_TEXT) {
+                if (rjust) {
                     fprintf(outfile, "%s", std::string(padding, ' ').c_str());
                 }
                 fprintf(outfile, "%s", cell.c_str());
-                if (hdr.hm_column_type == SQLITE3_TEXT) {
+                if (!rjust) {
                     fprintf(outfile, "%s", std::string(padding, ' ').c_str());
                 }
             }
-            fprintf(outfile, "\u2502\n");
+            fprintf(outfile,
+                    tf == text_format_t::TF_MARKDOWN ? "|\n" : "\u2502\n");
 
             line_count += 1;
         }
 
-        first = true;
-        fprintf(outfile, "\u2514");
-        for (const auto& hdr : dls.dls_headers) {
-            auto cell_line = repeat("\u2501", hdr.hm_column_size);
+        if (tf != text_format_t::TF_MARKDOWN) {
+            first = true;
+            fprintf(outfile, "\u2514");
+            for (const auto& hdr : dls.dls_headers) {
+                auto cell_line = repeat("\u2501", hdr.hm_column_size);
 
-            if (!first) {
-                fprintf(outfile, "\u2534");
+                if (!first) {
+                    fprintf(outfile, "\u2534");
+                }
+                fprintf(outfile, "%s", cell_line.c_str());
+                first = false;
             }
-            fprintf(outfile, "%s", cell_line.c_str());
-            first = false;
+            fprintf(outfile, "\u2518\n");
         }
-        fprintf(outfile, "\u2518\n");
-
     } else if (args[0] == "write-json-to") {
         yajlpp_gen gen;
 
@@ -2470,9 +2500,18 @@ com_filter(exec_context& ec,
                       pf->get_index(),
                       args[1].c_str());
             fs.add_filter(pf);
+            const auto start_time = std::chrono::steady_clock::now();
             tss->text_filters_changed();
+            const auto end_time = std::chrono::steady_clock::now();
+            const double duration
+                = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      end_time - start_time)
+                      .count()
+                / 1000.0;
 
-            retval = "info: filter now active";
+            retval = fmt::format(
+                FMT_STRING("info: filter activated in {:.3}s"),
+                duration);
         }
     } else {
         return ec.make_error("expecting a regular expression to filter");
@@ -3090,13 +3129,13 @@ com_open(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
             auto colon_index = fn.rfind(':');
             auto hash_index = fn.rfind('#');
             if (colon_index != std::string::npos) {
-                auto top_range
-                    = scn::string_view{&fn[colon_index + 1], &(*fn.cend())};
+                auto top_range = std::string_view{&fn[colon_index + 1],
+                                                  fn.size() - colon_index - 1};
                 auto scan_res = scn::scan_value<int>(top_range);
 
                 if (scan_res) {
                     fn = fn.substr(0, colon_index);
-                    file_loc = vis_line_t(scan_res.value());
+                    file_loc = vis_line_t(scan_res->value());
                 }
             } else if (hash_index != std::string::npos) {
                 file_loc = fn.substr(hash_index);
@@ -4246,7 +4285,7 @@ com_clear_partition(exec_context& ec,
             part_start = bv.prev(tc.get_selection());
         }
         if (!part_start) {
-            return ec.make_error("top line is not in a partition");
+            return ec.make_error("focused line is not in a partition");
         }
 
         if (!ec.ec_dry_run) {
@@ -5549,19 +5588,21 @@ com_config(exec_context& ec,
                 }
 
                 if (ypc.ypc_current_handler->jph_callbacks.yajl_string) {
+                    yajl_string_props_t props{};
                     ypc.ypc_callbacks.yajl_string(
                         &ypc,
                         (const unsigned char*) value.c_str(),
-                        value.size());
+                        value.size(),
+                        &props);
                     changed = true;
                 } else if (ypc.ypc_current_handler->jph_callbacks.yajl_integer)
                 {
                     auto scan_res = scn::scan_value<int64_t>(value);
-                    if (!scan_res || !scan_res.empty()) {
+                    if (!scan_res || !scan_res->range().empty()) {
                         return ec.make_error("expecting an integer, found: {}",
                                              value);
                     }
-                    ypc.ypc_callbacks.yajl_integer(&ypc, scan_res.value());
+                    ypc.ypc_callbacks.yajl_integer(&ypc, scan_res->value());
                     changed = true;
                 } else if (ypc.ypc_current_handler->jph_callbacks.yajl_boolean)
                 {
@@ -5792,10 +5833,10 @@ command_prompt(std::vector<std::string>& args)
         ldh.parse_line(log_view.get_selection(), true);
 
         if (tc == &lnav_data.ld_views[LNV_DB]) {
-            db_label_source& dls = lnav_data.ld_db_row_source;
+            auto& dls = lnav_data.ld_db_row_source;
 
             for (auto& dls_header : dls.dls_headers) {
-                if (!dls_header.hm_graphable) {
+                if (!dls_header.is_graphable()) {
                     continue;
                 }
 
@@ -6147,15 +6188,16 @@ readline_context::command_t STD_COMMANDS[] = {
      com_adjust_log_time,
 
      help_text(":adjust-log-time")
-         .with_summary("Change the timestamps of the top file to be relative "
-                       "to the given date")
+         .with_summary(
+             "Change the timestamps of the focused file to be relative "
+             "to the given date")
          .with_parameter(
              help_text("timestamp",
-                       "The new timestamp for the top line in the view")
+                       "The new timestamp for the focused line in the view")
                  .with_format(help_parameter_format_t::HPF_DATETIME))
-         .with_example({"To set the top timestamp to a given date",
+         .with_example({"To set the focused timestamp to a given date",
                         "2017-01-02T05:33:00"})
-         .with_example({"To set the top timestamp back an hour", "-1h"})},
+         .with_example({"To set the focused timestamp back an hour", "-1h"})},
 
     {"unix-time",
      com_unix_time,
@@ -6262,7 +6304,7 @@ readline_context::command_t STD_COMMANDS[] = {
      com_mark,
 
      help_text(":mark")
-         .with_summary("Toggle the bookmark state for the top line in the "
+         .with_summary("Toggle the bookmark state for the focused line in the "
                        "current view")
          .with_tags({"bookmarks"})},
     {
@@ -6363,7 +6405,7 @@ readline_context::command_t STD_COMMANDS[] = {
              help_text("field-name",
                        "The name of the field to hide in the format for "
                        "the "
-                       "top log line.  "
+                       "focused log line.  "
                        "A qualified name can be used where the field "
                        "name is "
                        "prefixed "
@@ -6394,7 +6436,7 @@ readline_context::command_t STD_COMMANDS[] = {
          .with_summary("Hide lines that come before the given date")
          .with_parameter(help_text("date", "An absolute or relative date"))
          .with_examples({
-             {"To hide the lines before the top line in the view", "here"},
+             {"To hide the lines before the focused line in the view", "here"},
              {"To hide the log messages before 6 AM today", "6am"},
          })
          .with_tags({"filtering"})},
@@ -6405,7 +6447,7 @@ readline_context::command_t STD_COMMANDS[] = {
          .with_summary("Hide lines that come after the given date")
          .with_parameter(help_text("date", "An absolute or relative date"))
          .with_examples({
-             {"To hide the lines after the top line in the view", "here"},
+             {"To hide the lines after the focused line in the view", "here"},
              {"To hide the lines after 6 AM today", "6am"},
          })
          .with_tags({"filtering"})},
@@ -6670,7 +6712,7 @@ readline_context::command_t STD_COMMANDS[] = {
          .with_parameter(
              help_text("shell-cmd", "The shell command-line to execute"))
          .with_tags({"io"})
-         .with_example({"To write the top line to 'sed' for processing",
+         .with_example({"To write the focused line to 'sed' for processing",
                         "sed -e 's/foo/bar/g'"})},
     {"redirect-to",
      com_redirect_to,
@@ -6729,7 +6771,7 @@ readline_context::command_t STD_COMMANDS[] = {
      com_create_logline_table,
 
      help_text(":create-logline-table")
-         .with_summary("Create an SQL table using the top line of "
+         .with_summary("Create an SQL table using the focused line of "
                        "the log view "
                        "as a template")
          .with_parameter(help_text("table-name", "The name for the new table"))
@@ -6827,13 +6869,14 @@ readline_context::command_t STD_COMMANDS[] = {
      com_show_only_this_file,
 
      help_text(":show-only-this-file")
-         .with_summary("Show only the file for the top line in the view")
+         .with_summary("Show only the file for the focused line in the view")
          .with_opposites({"hide-file"})},
     {"close",
      com_close,
 
      help_text(":close")
-         .with_summary("Close the given file(s) or the top file in the view")
+         .with_summary(
+             "Close the given file(s) or the focused file in the view")
          .with_parameter(help_text{"path",
                                    "A path or glob pattern that "
                                    "specifies the files to close"}
@@ -6844,7 +6887,7 @@ readline_context::command_t STD_COMMANDS[] = {
         com_comment,
 
         help_text(":comment")
-            .with_summary("Attach a comment to the top log line.  The "
+            .with_summary("Attach a comment to the focused log line.  The "
                           "comment will be "
                           "displayed right below the log message it is "
                           "associated with. "
@@ -6853,7 +6896,7 @@ readline_context::command_t STD_COMMANDS[] = {
                           "new-lines with '\\n'.")
             .with_parameter(help_text("text", "The comment text"))
             .with_example({"To add the comment 'This is where it all went "
-                           "wrong' to the top line",
+                           "wrong' to the focused line",
                            "This is where it all went wrong"})
             .with_tags({"metadata"}),
 
@@ -6863,7 +6906,7 @@ readline_context::command_t STD_COMMANDS[] = {
      com_clear_comment,
 
      help_text(":clear-comment")
-         .with_summary("Clear the comment attached to the top log line")
+         .with_summary("Clear the comment attached to the focused log line")
          .with_opposites({"comment"})
          .with_tags({"metadata"})},
     {
@@ -6871,11 +6914,11 @@ readline_context::command_t STD_COMMANDS[] = {
         com_tag,
 
         help_text(":tag")
-            .with_summary("Attach tags to the top log line")
+            .with_summary("Attach tags to the focused log line")
             .with_parameter(
                 help_text("tag", "The tags to attach").one_or_more())
             .with_example({"To add the tags '#BUG123' and '#needs-review' to "
-                           "the top line",
+                           "the focused line",
                            "#BUG123 #needs-review"})
             .with_tags({"metadata"}),
     },
@@ -6883,11 +6926,10 @@ readline_context::command_t STD_COMMANDS[] = {
      com_untag,
 
      help_text(":untag")
-         .with_summary("Detach tags from the top log line")
+         .with_summary("Detach tags from the focused log line")
          .with_parameter(help_text("tag", "The tags to detach").one_or_more())
          .with_example({"To remove the tags '#BUG123' and "
-                        "'#needs-review' from "
-                        "the top line",
+                        "'#needs-review' from the focused line",
                         "#BUG123 #needs-review"})
          .with_opposites({"tag"})
          .with_tags({"metadata"})},
@@ -6907,17 +6949,19 @@ readline_context::command_t STD_COMMANDS[] = {
      com_partition_name,
 
      help_text(":partition-name")
-         .with_summary("Mark the top line in the log view as the start of a "
-                       "new partition with the given name")
+         .with_summary(
+             "Mark the focused line in the log view as the start of a "
+             "new partition with the given name")
          .with_parameter(help_text("name", "The name for the new partition"))
-         .with_example({"To mark the top line as the start of the partition "
-                        "named 'boot #1'",
-                        "boot #1"})},
+         .with_example(
+             {"To mark the focused line as the start of the partition "
+              "named 'boot #1'",
+              "boot #1"})},
     {"clear-partition",
      com_clear_partition,
 
      help_text(":clear-partition")
-         .with_summary("Clear the partition the top line is a part of")
+         .with_summary("Clear the partition the focused line is a part of")
          .with_opposites({"partition-name"})},
     {"session",
      com_session,

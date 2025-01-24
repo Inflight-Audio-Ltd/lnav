@@ -59,7 +59,7 @@
 #include "command_executor.hh"
 #include "config.h"
 #include "default-config.h"
-#include "scn/scn.h"
+#include "scn/scan.h"
 #include "styling.hh"
 #include "view_curses.hh"
 #include "yajlpp/yajlpp.hh"
@@ -417,7 +417,10 @@ update_installs_from_git()
 }
 
 static int
-read_repo_path(yajlpp_parse_context* ypc, const unsigned char* str, size_t len)
+read_repo_path(yajlpp_parse_context* ypc,
+               const unsigned char* str,
+               size_t len,
+               yajl_string_props_t*)
 {
     auto path = std::string((const char*) str, len);
 
@@ -619,36 +622,6 @@ static const struct json_path_container global_var_handlers = {
         .for_field(&_lnav_config::lc_global_vars),
 };
 
-static const struct json_path_container style_config_handlers =
-    json_path_container{
-        yajlpp::property_handler("color")
-            .with_synopsis("#hex|color_name")
-            .with_description(
-                "The foreground color value for this style. The value can be "
-                "the name of an xterm color, the hexadecimal value, or a theme "
-                "variable reference.")
-            .with_example("#fff")
-            .with_example("Green")
-            .with_example("$black")
-            .for_field(&style_config::sc_color),
-        yajlpp::property_handler("background-color")
-            .with_synopsis("#hex|color_name")
-            .with_description(
-                "The background color value for this style. The value can be "
-                "the name of an xterm color, the hexadecimal value, or a theme "
-                "variable reference.")
-            .with_example("#2d2a2e")
-            .with_example("Green")
-            .for_field(&style_config::sc_background_color),
-        yajlpp::property_handler("underline")
-            .with_description("Indicates that the text should be underlined.")
-            .for_field(&style_config::sc_underline),
-        yajlpp::property_handler("bold")
-            .with_description("Indicates that the text should be bolded.")
-            .for_field(&style_config::sc_bold),
-    }
-        .with_definition_id("style");
-
 static const auto icon_config_handlers
     = json_path_container{
         yajlpp::property_handler("value")
@@ -660,6 +633,22 @@ static const json_path_container theme_icons_handlers = {
     yajlpp::property_handler("hidden")
         .with_description("Icon for hidden fields")
         .for_child(&lnav_theme::lt_icon_hidden)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("ok")
+        .with_description("Icon for OK")
+        .for_child(&lnav_theme::lt_icon_ok)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("info")
+        .with_description("Icon for informational messages")
+        .for_child(&lnav_theme::lt_icon_info)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("warning")
+        .with_description("Icon for warning messages")
+        .for_child(&lnav_theme::lt_icon_warning)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("error")
+        .with_description("Icon for error messages")
+        .for_child(&lnav_theme::lt_icon_error)
         .with_children(icon_config_handlers),
 };
 
@@ -1635,7 +1624,10 @@ const std::set<std::string> SUPPORTED_FORMAT_SCHEMAS = {
 };
 
 static int
-read_id(yajlpp_parse_context* ypc, const unsigned char* str, size_t len)
+read_id(yajlpp_parse_context* ypc,
+        const unsigned char* str,
+        size_t len,
+        yajl_string_props_t*)
 {
     auto file_id = std::string((const char*) str, len);
 
@@ -1713,12 +1705,12 @@ public:
             std::string keystr;
             if (keyseq_sf.startswith("f")) {
                 auto sv = keyseq_sf.to_string_view();
-                int32_t value;
-                auto scan_res = scn::scan(sv, "f{}", value);
+                auto scan_res = scn::scan<int32_t>(sv, "f{}");
                 if (!scan_res) {
                     log_error("invalid function key sequence: %s", keyseq_sf);
                     continue;
                 }
+                auto value = scan_res->value();
                 if (value < 0 || value > 64) {
                     log_error("invalid function key number: %s", keyseq_sf);
                     continue;
@@ -1729,13 +1721,13 @@ public:
                 auto sv
                     = string_fragment::from_str(pair.first).to_string_view();
                 while (!sv.empty()) {
-                    int32_t value;
-                    auto scan_res = scn::scan(sv, "x{:2x}", value);
+                    auto scan_res = scn::scan<int32_t>(sv, "x{:2x}");
                     if (!scan_res) {
                         log_error("invalid key sequence: %s",
                                   pair.first.c_str());
                         break;
                     }
+                    auto value = scan_res->value();
                     auto ch = (char) (value & 0xff);
                     switch (ch) {
                         case '\t':
@@ -1748,7 +1740,8 @@ public:
                             keystr.push_back(ch);
                             break;
                     }
-                    sv = scan_res.range_as_string_view();
+                    sv = std::string_view{scan_res->range().data(),
+                                          scan_res->range().size()};
                 }
             }
 
@@ -1882,7 +1875,7 @@ load_default_config(struct _lnav_config& config_obj,
 }
 
 static bool
-load_default_configs(struct _lnav_config& config_obj,
+load_default_configs(_lnav_config& config_obj,
                      const std::string& path,
                      std::vector<lnav::console::user_message>& errors)
 {
@@ -1901,10 +1894,26 @@ load_config(const std::vector<std::filesystem::path>& extra_paths,
 {
     auto user_config = lnav::paths::dotlnav() / "config.json";
 
-    for (auto& bsf : lnav_config_json) {
+    for (const auto& bsf : lnav_config_json) {
         auto sample_path = lnav::paths::dotlnav() / "configs" / "default"
             / fmt::format(FMT_STRING("{}.sample"), bsf.get_name());
-        auto sfp =  bsf.to_string_fragment_producer();
+
+        auto stat_res = lnav::filesystem::stat_file(sample_path);
+        if (stat_res.isOk()) {
+            auto st = stat_res.unwrap();
+            if (st.st_mtime >= lnav::filesystem::self_mtime()) {
+                log_debug("skipping writing sample: %s (mtimes %d >= %d)",
+                          bsf.get_name(),
+                          st.st_mtime,
+                          lnav::filesystem::self_mtime());
+                continue;
+            }
+            log_debug("sample file needs to be updated: %s", bsf.get_name());
+        } else {
+            log_debug("sample file does not exist: %s", bsf.get_name());
+        }
+
+        auto sfp = bsf.to_string_fragment_producer();
         auto write_res = lnav::filesystem::write_file(sample_path, *sfp);
         if (write_res.isErr()) {
             fprintf(stderr,

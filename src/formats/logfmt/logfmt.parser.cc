@@ -33,7 +33,7 @@
 
 #include "base/intern_string.hh"
 #include "config.h"
-#include "scn/scn.h"
+#include "scn/scan.h"
 
 logfmt::parser::parser(string_fragment sf) : p_next_input(sf) {}
 
@@ -222,8 +222,8 @@ logfmt::parser::step()
     auto value_pair = value_start.split_while(bvp);
 
     if (value_pair) {
-        static const auto TRUE_FRAG = string_fragment::from_const("true");
-        static const auto FALSE_FRAG = string_fragment::from_const("false");
+        static constexpr auto TRUE_FRAG = string_fragment::from_const("true");
+        static constexpr auto FALSE_FRAG = string_fragment::from_const("false");
 
         this->p_next_input = value_pair->second;
         if (bvp.is_integer()) {
@@ -232,7 +232,7 @@ logfmt::parser::step()
             auto int_scan_res
                 = scn::scan_value<int64_t>(value_pair->first.to_string_view());
             if (int_scan_res) {
-                retval.iv_value = int_scan_res.value();
+                retval.iv_value = int_scan_res->value();
             }
             retval.iv_str_value = value_pair->first;
 
@@ -244,7 +244,7 @@ logfmt::parser::step()
             auto float_scan_res
                 = scn::scan_value<double>(value_pair->first.to_string_view());
             if (float_scan_res) {
-                retval.fv_value = float_scan_res.value();
+                retval.fv_value = float_scan_res->value();
             }
             retval.fv_str_value = value_pair->first;
 

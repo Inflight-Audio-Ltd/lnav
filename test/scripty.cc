@@ -157,6 +157,7 @@ public:
             dup2(slave, STDOUT_FILENO);
 
             unsetenv("TERM_PROGRAM");
+            unsetenv("COLORTERM");
             setenv("IN_SCRIPTY", "1", 1);
             setenv("TERM", term_type, 1);
         } else {
@@ -885,11 +886,11 @@ struct term_machine {
                                     fprintf(scripty_data.sd_from_child,
                                             "CSI DSR cursor position\n");
                                     if (!this->tm_child_term.get_passout()) {
-                                        static const auto* CPR = "\x1b[1;1R";
+                                        static const auto CPR = "\x1b[1;1R";
 
                                         write(this->tm_child_term.get_fd(),
                                               CPR,
-                                              sizeof(CPR));
+                                              strlen(CPR));
                                     }
                                 }
                                 break;

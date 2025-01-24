@@ -3,10 +3,71 @@
 Features:
 * Log message timestamps are now represented with microsecond
   precision internally instead of just millisecond.
+* The `log_time` and `log_level` fields can now be hidden.
+* Added a `report-access-log` script that generates a report that
+  is similar to the output of the [goaccess](https://goaccess.io)
+  utility.
+* Added a `find-msg` script that can be used to find the
+  next/previous message with a field that matches the value of the
+  field in the focused message.
+* Added a `find-chained-msg` script that can be used to find the
+  next/previous message where a target field matches the value of
+  the source field in the focused message.
+* Scripts can now specify their output format using the
+  `@output-format:` documentation description.
+  This setting can affect the output of some commands, like
+  `:write-table-to` which will output Markdown tables when the
+  output is set to `text/markdown`.
+* Column alignment in Markdown tables is now supported.
+* Added ecs_log for the Elastic Common Schema from @ba-didi.
+* Added a Proxifier log format.
+* Escape sequences for 24-bit color are now handled.
+* The `-i` option for installing files will now copy `.lnav`
+  script files to the `formats/installed` directory.
+* Added `italic` and `strike` to the text styling configuration.
+* DB query results can now be styled on a row-by-row basis by
+  adding a column with the name `__lnav_style__`.
+* Added "format <format-name> test" management command to make it
+  easier to test a format against a file.
+  Can be helpful for determining why a file is not being recognized
+  by particular format.
+* Added a "performance" section to the documentation.
+
+Interface changes:
+* DB query results that start with a number are right justified
+  instead of only full numbers.
+* Left-clicking a local link in a Markdown document will jump to
+  that section of the document instead of opening the overlay
+  menu.
+  You can still open the overlay menu by right-clicking on the link.
+* Rows in a Markdown table are now highlighted with alternating
+  styles.
+* Long-running SQL queries in scripts are now mentioned in the UI
+  to make it easier to see what is going on.
+* Defining a value in a log format with the same name as one of
+  predefined columns in the log virtual tables will now generate
+  an error.
+* The DB view will now chart result columns that contain a number
+  with a unit, like "KB", "MB", "GB", etc...
+
+Breaking changes:
+* The `parse_url()` SQL function no longer raises an error for an
+  invalid URL.
+  Instead, it will return a JSON object with an object with the
+  following properties:
+  - `error` - An identifier for the error.
+  - `url` - The invalid URL itself.
+  - `reason` - A description of the error.
 
 Bug Fixes:
-* Improved startup time.
+* Reduced startup time.
+* Reduced indexing time for plain text and JSON-lines logs.
 * Reduced memory footprint.
+* Improved search performance.
+* Reduce time to open help text.
+* Improved performance of log virtual tables when ordering the
+  result by `log_line DESC`.
+* Improved performance of the `spooky_hash()` SQL function.
 
 Maintenance:
 * Replaced ncurses with notcurses.
@@ -63,8 +124,9 @@ Interface Changes:
   to `SHIFT` when clicking/dragging in the main view to
   highlight lines.  A few terminals capture shift+clicks as a
   way to select text and do not pass them to the application.
-* Clicking on an internal link in a Markdown document will move 
+* Clicking on an internal link in a Markdown document will move
   to that section.
+* Search duration is now reported in the bottom prompt line.
 
 Bug Fixes:
 * Log messages in formats with custom timestamp formats were
