@@ -561,6 +561,14 @@ public:
     }
 };
 
+class text_detail_provider {
+public:
+    virtual ~text_detail_provider() = default;
+
+    virtual std::optional<json_string>
+    text_row_details(const textview_curses& tc) = 0;
+};
+
 /**
  * The textview_curses class adds user bookmarks and searching to the standard
  * list view interface.
@@ -574,6 +582,8 @@ class textview_curses
 public:
     using action = std::function<void(textview_curses*)>;
 
+    const static bookmark_type_t BM_ERRORS;
+    const static bookmark_type_t BM_WARNINGS;
     const static bookmark_type_t BM_USER;
     const static bookmark_type_t BM_USER_EXPR;
     const static bookmark_type_t BM_SEARCH;
@@ -797,9 +807,14 @@ public:
         return *this;
     }
 
-    std::optional<std::chrono::milliseconds> consume_search_duration() {
+    std::optional<std::chrono::milliseconds> consume_search_duration()
+    {
         return std::exchange(this->tc_search_duration, std::nullopt);
     }
+
+    void apply_highlights(attr_line_t& al,
+                          const line_range& body,
+                          const line_range& orig_line);
 
     std::function<void(textview_curses&)> tc_state_event_handler;
 

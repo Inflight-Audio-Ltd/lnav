@@ -336,8 +336,6 @@ noinst_HEADERS = \
 	session_data.hh \
 	shared_buffer.hh \
 	shlex.hh \
-	shlex.resolver.hh \
-	simdutf8check.h \
 	spectro_impls.hh \
 	spectro_source.hh \
 	sqlitepp.hh \
@@ -357,6 +355,7 @@ noinst_HEADERS = \
 	text_anonymizer.hh \
 	text_format.hh \
 	text_overlay_menu.hh \
+	textinput_curses.hh \
 	textfile_highlighters.hh \
 	textfile_sub_source.hh \
 	textfile_sub_source.cfg.hh \
@@ -513,6 +512,7 @@ libdiag_a_SOURCES = \
 	statusview_curses.cc \
 	string-extension-functions.cc \
 	styling.cc \
+	term_extra.cc \
 	text_anonymizer.cc \
 	text_format.cc \
 	text_overlay_menu.cc \
@@ -522,6 +522,7 @@ libdiag_a_SOURCES = \
 	sql_util.cc \
 	state-extension-functions.cc \
 	sysclip.cc \
+	textinput_curses.cc \
 	textfile_highlighters.cc \
 	textview_curses.cc \
 	time-extension-functions.cc \

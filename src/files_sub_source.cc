@@ -42,8 +42,10 @@
 #include "config.h"
 #include "lnav.hh"
 #include "mapbox/variant.hpp"
+#include "md4cpp.hh"
 #include "sql_util.hh"
 
+using namespace md4cpp::literals;
 using namespace lnav::roles::literals;
 
 namespace files_model {
@@ -317,7 +319,7 @@ files_sub_source::text_value_for_line(textview_curses& tc,
             al.with_attr_for_all(VC_ROLE.value(cursor_role));
         }
         if (line == fc.fc_other_files.size() - 1) {
-            al.with_attr_for_all(VC_STYLE.value(text_attrs{NCSTYLE_UNDERLINE}));
+            al.with_attr_for_all(VC_STYLE.value(text_attrs::with_underline()));
         }
 
         value_out = al.get_string();
@@ -492,10 +494,14 @@ files_sub_source::text_selection_changed(textview_curses& tc)
             auto actual_path = lf->get_actual_path();
             auto format = lf->get_format();
 
+            details.emplace_back(attr_line_t()
+                                     .appendf(FMT_STRING("{}"), path.filename())
+                                     .with_attr_for_all(VC_STYLE.value(
+                                         text_attrs::with_bold())));
             details.emplace_back(
-                attr_line_t()
-                    .appendf(FMT_STRING("{}"), path)
-                    .with_attr_for_all(VC_ROLE.value(role_t::VCR_IDENTIFIER)));
+                attr_line_t("  ")
+                    .append(":open_file_folder:"_emoji)
+                    .appendf(FMT_STRING(" {}"), path.parent_path()));
             const auto notes = lf->get_notes();
             if (!notes.empty()) {
                 details.emplace_back(
@@ -630,9 +636,25 @@ files_sub_source::text_selection_changed(textview_curses& tc)
                           details.emplace_back(attr_line_t("    ").append(al));
                       });
             } else {
-                const auto um = lnav::console::user_message::info(attr_line_t(
-                    "The file contents did not match any log "
-                    "formats and can be accessed in the TEXT view"));
+                auto cmd
+                    = attr_line_t("lnav -m format ")
+                          .append("format-name",
+                                  VC_STYLE.value(text_attrs::with_underline()))
+                          .append(" test ")
+                          .append(lf->get_filename())
+                          .with_attr_for_all(
+                              VC_ROLE.value(role_t::VCR_QUOTED_CODE));
+                const auto um
+                    = lnav::console::user_message::info(
+
+                          "The file contents did not match any log "
+                          "formats and can be accessed in the TEXT view")
+                          .with_help(attr_line_t("If you expected this file to "
+                                                 "match a particular "
+                                                 "format, you can run the "
+                                                 "following to get more "
+                                                 "details:\n  ")
+                                         .append(cmd));
                 um.to_attr_line().rtrim().split_lines()
                     | lnav::itertools::for_each([&details](const auto& al) {
                           details.emplace_back(attr_line_t("    ").append(al));

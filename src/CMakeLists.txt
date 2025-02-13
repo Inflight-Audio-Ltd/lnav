@@ -3,6 +3,8 @@ include(CheckIncludeFile)
 include(CheckLibraryExists)
 include(CheckFunctionExists)
 
+add_compile_definitions(_GNU_SOURCE)
+
 check_type_size(off_t SIZEOF_OFF_T)
 
 check_include_file("pty.h" HAVE_PTY_H)
@@ -530,9 +532,11 @@ add_library(
         sqlitepp.cc
         state-extension-functions.cc
         styling.cc
+        term_extra.cc
         text_anonymizer.cc
         text_format.cc
         text_overlay_menu.cc
+        textinput_curses.cc
         textfile_highlighters.cc
         textfile_sub_source.cc
         textview_curses.cc
@@ -647,8 +651,6 @@ add_library(
         session.export.hh
         sequence_sink.hh
         shlex.hh
-        shlex.resolver.hh
-        simdutf8check.h
         spectro_impls.hh
         spectro_source.hh
         sqlitepp.hh
@@ -664,6 +666,7 @@ add_library(
         text_anonymizer.hh
         text_format.hh
         text_overlay_menu.hh
+        textinput_curses.hh
         textfile_highlighters.hh
         textfile_sub_source.hh
         textfile_sub_source.cfg.hh

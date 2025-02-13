@@ -234,6 +234,7 @@ static const std::unordered_set<std::string> DEFAULT_DB_KEY_NAMES = {
     "range_stop",  "rowid",         "st_dev",
     "st_gid",      "st_ino",        "st_mode",
     "st_rdev",     "st_uid",        "pattern",
+    "paused",      "filtering",
 };
 
 static auto bound_pollable_supervisor
@@ -717,11 +718,16 @@ handle_config_ui_key(notcurses* nc, const ncinput& ch, const char* keyseq)
     if (ch.id == NCKEY_F02) {
         auto& mouse_i = injector::get<xterm_mouse&>();
         mouse_i.set_enabled(nc, !mouse_i.is_enabled());
-        return retval;
+        return true;
     }
 
     switch (lnav_data.ld_mode) {
         case ln_mode_t::FILES:
+            if (ch.id == NCKEY_PASTE) {
+                handle_paste_content(nc, ch);
+                return true;
+            }
+
             if (ch.eff_text[0] == NCKEY_GS
                 || (ch.id == ']' && ncinput_ctrl_p(&ch)))
             {
@@ -819,6 +825,10 @@ handle_key(notcurses* nc, const ncinput& ch, const char* keyseq)
                 case ln_mode_t::SPECTRO_DETAILS: {
                     if (ch.id == '\t' || ch.id == 'q') {
                         set_view_mode(ln_mode_t::PAGING);
+                        return true;
+                    }
+                    if (ch.id == NCKEY_PASTE) {
+                        handle_paste_content(nc, ch);
                         return true;
                     }
                     if (lnav_data.ld_spectro_details_view.handle_key(ch)) {
@@ -965,7 +975,7 @@ struct refresh_status_bars {
 
     void doit() const
     {
-        struct timeval current_time{};
+        timeval current_time{};
         ncinput ch;
 
         gettimeofday(&current_time, nullptr);
@@ -981,6 +991,8 @@ struct refresh_status_bars {
             lnav_data.ld_view_stack.top() | [ch](auto tc) {
                 lnav_data.ld_key_repeat_history.update(ch.id, tc->get_top());
             };
+
+            ncinput_free_paste_content(&ch);
 
             if (!lnav_data.ld_looping) {
                 // No reason to keep processing input after the
@@ -1273,8 +1285,8 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
 
         errpipe[0].close_on_exec();
         errpipe[1].close_on_exec();
-        auto pipe_err_handle
-            = log_pipe_err(errpipe[0].release(), errpipe[1].release());
+        auto pipe_err_handle = std::make_optional(
+            log_pipe_err(errpipe[0].release(), errpipe[1].release()));
 
         notcurses_options nco = {};
         nco.flags |= NCOPTION_SUPPRESS_BANNERS | NCOPTION_NO_WINCH_SIGHANDLER;
@@ -1282,18 +1294,45 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
         auto create_screen_res = screen_curses::create(nco);
 
         if (create_screen_res.isErr()) {
+            pipe_err_handle = std::nullopt;
             log_error("create screen failed with: %s",
                       create_screen_res.unwrapErr().c_str());
+            auto help_txt = attr_line_t();
+            auto term_var = getenv("TERM");
+            if (term_var == nullptr) {
+                help_txt.append("The ")
+                    .append("TERM"_symbol)
+                    .append(" environment variable is not set.  ");
+            } else {
+                help_txt.append("The ")
+                    .append("TERM"_symbol)
+                    .append(" value of ")
+                    .append_quoted(term_var)
+                    .append(" is not known.  ");
+            }
+            help_txt
+                .append(
+                    "Check for your "
+                    "terminal in ")
+                .append(
+                    "https://github.com/dankamongmen/notcurses/blob/master/TERMINALS.md"_hyperlink)
+                .append(" or use ")
+                .append_quoted("xterm-256color");
             lnav::console::print(
                 stderr,
                 lnav::console::user_message::error("unable to open TUI")
-                    .with_reason(create_screen_res.unwrapErr()));
+                    .with_reason(create_screen_res.unwrapErr())
+                    .with_help(help_txt));
             return;
         }
 
         auto sc = create_screen_res.unwrap();
         auto inputready_fd = notcurses_inputready_fd(sc.get_notcurses());
         auto& mouse_i = injector::get<xterm_mouse&>();
+
+        auto _paste = finally(
+            [&sc] { notcurses_bracketed_paste_disable(sc.get_notcurses()); });
+        notcurses_bracketed_paste_enable(sc.get_notcurses());
 
         auto ui_cb_mouse = false;
         ec.ec_ui_callbacks.uc_pre_stdout_write
@@ -1318,6 +1357,7 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                   auto nci = ncinput{};
                   do {
                       notcurses_get_blocking(sc.get_notcurses(), &nci);
+                      ncinput_free_paste_content(&nci);
                   } while (nci.evtype == NCTYPE_RELEASE || ncinput_lock_p(&nci)
                            || ncinput_modifier_p(&nci));
                   notcurses_enter_alternate_screen(sc.get_notcurses());
@@ -1347,15 +1387,17 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
 
         lnav_data.ld_window = sc.get_std_plane();
 
-#ifdef VDSUSP
         {
             struct termios tio;
 
             tcgetattr(STDIN_FILENO, &tio);
+            tio.c_cc[VSTART] = 0;
+            tio.c_cc[VSTOP] = 0;
+#ifdef VDSUSP
             tio.c_cc[VDSUSP] = 0;
+#endif
             tcsetattr(STDIN_FILENO, TCSANOW, &tio);
         }
-#endif
 
         auto& vc = view_colors::singleton();
         view_colors::init(sc.get_notcurses());
@@ -1397,8 +1439,6 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                 }
             }
         }
-
-        execute_examples();
 
         rlc->set_window(lnav_data.ld_window);
         rlc->set_focus_action(rl_focus);
@@ -1743,6 +1783,38 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                                 .append(" to reset session"));
                         lnav_data.ld_rl_view->set_attr_value(um.to_attr_line());
                     }
+                    const auto* nc_caps
+                        = notcurses_capabilities(sc.get_notcurses());
+                    if (nc_caps->colors < 256
+                        && (std::filesystem::file_time_type::clock::now()
+                                - lnav_data.ld_last_dot_lnav_time
+                            > 24h))
+                    {
+                        auto um
+                            = lnav::console::user_message::info(
+                                  attr_line_t("The terminal ")
+                                      .append_quoted(getenv("TERM"))
+                                      .append(
+                                          " appears to have a limited color "
+                                          "palette, which can make things hard "
+                                          "to read"))
+                                  .with_reason(
+                                      attr_line_t(
+                                          "The terminal appears to only have ")
+                                          .append(lnav::roles::number(
+                                              fmt::to_string(nc_caps->colors)))
+                                          .append(" colors"))
+                                  .with_help(
+                                      attr_line_t("Try setting ")
+                                          .append("TERM"_symbol)
+                                          .append(" to ")
+                                          .append_quoted("xterm-256color"));
+                        lnav_data.ld_user_message_source.replace_with(
+                            um.to_attr_line());
+                        lnav_data.ld_user_message_view.reload_data();
+                        lnav_data.ld_user_message_expiration
+                            = std::chrono::steady_clock::now() + 20s;
+                    }
 
                     lnav_data.ld_session_loaded = true;
                     session_stage += 1;
@@ -1936,17 +2008,20 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                     auto old_gen
                         = lnav_data.ld_active_files.fc_files_generation;
                     while (notcurses_get_nblock(sc.get_notcurses(), &nci) > 0) {
-                        lnav_data.ld_user_message_source.clear();
+                        if (nci.evtype != NCTYPE_RELEASE) {
+                            lnav_data.ld_user_message_source.clear();
+                        }
 
                         alerter::singleton().new_input(nci);
 
                         lnav_data.ld_input_dispatcher.new_input(
                             current_time, sc.get_notcurses(), nci);
 
-                        lnav_data.ld_view_stack.top() | [nci](auto tc) {
+                        lnav_data.ld_view_stack.top() | [&nci](auto tc) {
                             lnav_data.ld_key_repeat_history.update(
                                 nci.id, tc->get_top());
                         };
+                        ncinput_free_paste_content(&nci);
 
                         if (!lnav_data.ld_looping) {
                             // No reason to keep processing input after the
@@ -2215,8 +2290,7 @@ VALUES ('org.lnav.mouse-support', -1, DATETIME('now', '+1 minute'),
                         tc->get_data_source()->listview_value_for_rows(
                             *tc, tc->get_selection(), rows);
                         auto& sa = rows[0].get_attrs();
-                        auto line_attr_opt
-                            = get_string_attr(sa, logline::L_FILE);
+                        auto line_attr_opt = get_string_attr(sa, L_FILE);
                         if (line_attr_opt) {
                             auto lf = line_attr_opt.value().get();
 
@@ -2523,6 +2597,33 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
 )";
 
         log_info("performing cleanup");
+
+        {
+            auto& dls = lnav_data.ld_db_row_source;
+            size_t memory_usage = 0, total_size = 0, cached_chunks = 0;
+            for (auto cc = dls.dls_cell_container.cc_first.get(); cc != nullptr;
+                 cc = cc->cc_next.get())
+            {
+                total_size += cc->cc_capacity;
+                if (cc->cc_data) {
+                    cached_chunks += 1;
+                    memory_usage += cc->cc_capacity;
+                } else {
+                    memory_usage += cc->cc_compressed_size;
+                }
+            }
+            log_debug(
+                "cell memory footprint: total=%zu; actual=%zu; "
+                "cached-chunks=%zu",
+                total_size,
+                memory_usage,
+                cached_chunks);
+        }
+
+        if (lnav_data.ld_spectro_source != nullptr) {
+            delete std::exchange(lnav_data.ld_spectro_source->ss_value_source,
+                                 nullptr);
+        }
 
         for (auto& tv : lnav_data.ld_views) {
             tv.set_window(nullptr);
@@ -3106,6 +3207,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         .set_reload_config_delegate(sel_reload_delegate)
         .set_sub_source(&lnav_data.ld_hist_source2);
     lnav_data.ld_views[LNV_DB].set_sub_source(&lnav_data.ld_db_row_source);
+    lnav_data.ld_views[LNV_DB].add_input_delegate(lnav_data.ld_db_row_source);
     lnav_data.ld_db_overlay.dos_labels = &lnav_data.ld_db_row_source;
     lnav_data.ld_db_example_row_source.dls_max_column_width = 15;
     lnav_data.ld_db_example_overlay.dos_labels
@@ -3116,7 +3218,8 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         = &lnav_data.ld_db_preview_source[1];
     lnav_data.ld_views[LNV_DB]
         .set_reload_config_delegate(sel_reload_delegate)
-        .set_overlay_source(&lnav_data.ld_db_overlay);
+        .set_overlay_source(&lnav_data.ld_db_overlay)
+        .set_tail_space(3_vl);
     lnav_data.ld_spectro_source = std::make_unique<spectrogram_source>();
     lnav_data.ld_views[LNV_SPECTRO]
         .set_reload_config_delegate(sel_reload_delegate)
@@ -3143,6 +3246,10 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
     lnav_data.ld_views[LNV_TIMELINE].set_selectable(true);
 
     auto _timeline_cleanup = finally([] {
+        for (auto& tc : lnav_data.ld_views) {
+            tc.set_window(nullptr);
+        }
+        lnav_data.ld_views[LNV_TEXT].set_overlay_source(nullptr);
         lnav_data.ld_views[LNV_TIMELINE].set_sub_source(nullptr);
         lnav_data.ld_views[LNV_TIMELINE].set_overlay_source(nullptr);
     });
@@ -3162,8 +3269,11 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         = &lnav_data.ld_file_details_source;
     lnav_data.ld_user_message_view.set_sub_source(
         &lnav_data.ld_user_message_source);
+
+#if 0
     auto overlay_menu = std::make_shared<text_overlay_menu>();
     lnav_data.ld_file_details_view.set_overlay_source(overlay_menu.get());
+#endif
 
     for (int lpc = 0; lpc < LNV__MAX; lpc++) {
         lnav_data.ld_views[lpc].set_gutter_source(new log_gutter_source());
@@ -3210,6 +3320,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         std::make_shared<log_format_vtab_impl>(
             *log_format::find_root_format("lnav_piper_log")));
 
+    log_info("BEGIN registering format tables");
     for (auto& iter : log_format::get_root_formats()) {
         auto lvi = iter->get_vtab_impl();
 
@@ -3217,11 +3328,12 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
             lnav_data.ld_vtab_manager->register_vtab(lvi);
         }
     }
+    log_info("END registering format tables")
 
-    load_format_extra(lnav_data.ld_db.in(),
-                      ec.ec_global_vars,
-                      lnav_data.ld_config_paths,
-                      loader_errors);
+        load_format_extra(lnav_data.ld_db.in(),
+                          ec.ec_global_vars,
+                          lnav_data.ld_config_paths,
+                          loader_errors);
     load_format_vtabs(lnav_data.ld_vtab_manager.get(), loader_errors);
 
     if (!loader_errors.empty()) {

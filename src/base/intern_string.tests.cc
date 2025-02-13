@@ -148,6 +148,14 @@ TEST_CASE("find_left_boundary")
             = sf.find_left_boundary(3, [](auto ch) { return ch == '\n'; });
         CHECK(full_sf.to_string() == in1);
     }
+
+    {
+        auto sf = string_fragment::from_const("\n    ");
+        auto last_line
+            = sf.find_left_boundary(sf.length(), string_fragment::tag1{'\n'});
+
+        CHECK(last_line.to_string() == "    ");
+    }
 }
 
 TEST_CASE("find_right_boundary")

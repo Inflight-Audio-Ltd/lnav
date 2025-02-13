@@ -3453,17 +3453,17 @@
                     "h5": {
                         "color": "",
                         "background-color": "",
-                        "underline": true,
+                        "underline": false,
                         "bold": false,
-                        "italic": false,
+                        "italic": true,
                         "strike": false
                     },
                     "h6": {
                         "color": "",
                         "background-color": "",
-                        "underline": true,
+                        "underline": false,
                         "bold": false,
-                        "italic": false,
+                        "italic": true,
                         "strike": false
                     },
                     "hr": {
@@ -6371,6 +6371,11 @@
                 }
             },
             "default": {
+                "f1": {
+                    "id": "",
+                    "command": ":help",
+                    "alt-msg": ""
+                },
                 "x04": {
                     "id": "",
                     "command": ";UPDATE lnav_top_view SET top = top + (height / 2), selection = (CASE movement WHEN 'top' THEN selection ELSE top + (height / 2) + (selection - top) END)",

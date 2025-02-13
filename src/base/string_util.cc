@@ -191,6 +191,23 @@ truncate_to(std::string& str, size_t max_char_len)
     str.insert(bytes_to_keep_at_front, ELLIPSIS);
 }
 
+ssize_t
+utf8_char_to_byte_index(const std::string& str, ssize_t ch_index)
+{
+    ssize_t retval = 0;
+
+    while (ch_index > 0) {
+        auto ch_len
+            = ww898::utf::utf8::char_size([&str, retval]() {
+                  return std::make_pair(str[retval], str.length() - retval - 1);
+              }).unwrapOr(1);
+
+        retval += ch_len;
+        ch_index -= 1;
+    }
+
+    return retval;
+}
 bool
 is_url(const std::string& fn)
 {
@@ -310,6 +327,10 @@ scrub_ws(const char* in, ssize_t len)
 
     std::string retval;
 
+    if (len > 0) {
+        retval.reserve(len);
+    }
+
     for (size_t lpc = 0; (len == -1 && in[lpc]) || (len >= 0 && lpc < len);
          lpc++)
     {
@@ -326,7 +347,7 @@ scrub_ws(const char* in, ssize_t len)
                 retval.append(CR_SYMBOL);
                 break;
             default:
-                retval.append(1, ch);
+                retval.push_back(ch);
                 break;
         }
     }
@@ -451,22 +472,3 @@ quote(string_fragment str)
 }
 
 }  // namespace lnav::pcre2pp
-
-std::optional<split_num_result>
-try_split_num_and_units(std::string_view in)
-{
-    auto scan_res = scn::scan_value<double>(in);
-    if (!scan_res) {
-        return std::nullopt;
-    }
-
-    auto unit_range = scan_res->range();
-    auto units = std::string_view{unit_range.data(), unit_range.size()};
-    if (units.size() > 3) {
-        return std::nullopt;
-    }
-    return split_num_result{
-        scan_res->value(),
-        units,
-    };
-}

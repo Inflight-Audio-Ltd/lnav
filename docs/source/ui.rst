@@ -167,6 +167,16 @@ will activate a corresponding prompt:
 The command-line is by the readline library, so the usual set of keyboard
 shortcuts can be used for editing and moving within the command-line.
 
+.. note::
+
+    Commands can also be executed by pasting a snippet when focused on
+    the main view, without opening a prompt.  The pasted snippet should
+    start with the appropriate sigil, for example, the colon in
+    :code:`:echo Hello, World!`.  This functionality requires the terminal
+    to support
+    `bracketed paste <https://en.wikipedia.org/wiki/Bracketed-paste>`_
+    mode.
+
 .. _ui_views:
 
 Views
@@ -216,6 +226,17 @@ to use for these types of files using the
   difference between the "actual time" and the "received time".  The "actual
   time" is the original textual timestamp.  The "received time" is the time
   of an earlier message that is larger than this log message's time.
+
+To get more details about a log message, move to the starting line of the
+message and press :kbd:`p` to open an overlay with information about the
+timestamp and individual fields.  You then can focus into the overlay panel
+by pressing :kbd:`Ctrl` + :kbd:`]` to operate on individual fields in the
+message.  Inside the overlay, the following hotkeys are supported:
+
+* :kbd:`SPC` to toggle field visibility
+* :kbd:`c` to copy the value of a field
+* :kbd:`#` to open the SQL prompt with a query to create a chart of this
+  field's values over time.
 
 The source file name for each message can be displayed by scrolling left.
 Scrolling left once will show the shortened version of the file name relative
@@ -310,6 +331,8 @@ can also press :kbd:`Shift` + :kbd:`i` to toggle the histogram view
 while synchronizing the top time.  While in the histogram view,
 pressing :kbd:`z` / :kbd:`Shift` + :kbd:`z` will zoom in/out.
 
+.. _timeline:
+
 TIMELINE
 ^^^^^^^^
 
@@ -323,8 +346,11 @@ TIMELINE
    are received and processed.
 
 The timeline view [#]_ visualizes operations over time.  The operations
-are identified by the "opid" field defined in the log format.  In the
-view, there is a header that shows the overall time span, the
+are identified by the "opid" field defined in the log format.  If the
+format does not define an OP ID, you can set one manually by doing an
+:code:`UPDATE` of the :code:`log_opid` column on the log vtable.
+
+In the view, there is a header that shows the overall time span, the
 narrowed time span around the focused line, and the column headers.
 Each row in the view shows the following:
 
@@ -450,12 +476,12 @@ elements will respond to mouse inputs:
 * when text is selected, a menu will pop up that can be used
   to filter based on the current text, search for it, or copy
   it to the clipboard;
-* right-clicking the start of a log message in the main view
-  will open the parser details overlay;
-* the parser details now displays a diamond next to fields to
+* right-clicking the start of a message in the LOG view or a
+  row in the DB view will open the details overlay;
+* the details overlay displays a diamond next to fields to
   indicate whether they are shown/hidden and this can be
   clicked to toggle the state;
-* the parser details will show a bar chart icon for fields with
+* the log details will show a bar chart icon for fields with
   values which, when clicked, will open either the spectrogram
   view for the given field or open the DB query prompt with a
   PRQL query to generate a histogram of the field values;

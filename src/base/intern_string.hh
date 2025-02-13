@@ -158,6 +158,10 @@ struct string_fragment {
 
     Result<ssize_t, const char*> utf8_length() const;
 
+    size_t column_to_byte_index(size_t col) const;
+
+    size_t byte_to_column_index(size_t byte_index) const;
+
     size_t column_width() const;
 
     const char* data() const { return &this->sf_string[this->sf_begin]; }
@@ -196,7 +200,7 @@ struct string_fragment {
 
     string_fragment sub_cell_range(int cell_start, int cell_end) const;
 
-    const char& operator[](int index) const
+    const char& operator[](size_t index) const
     {
         return this->sf_string[sf_begin + index];
     }
@@ -335,6 +339,11 @@ struct string_fragment {
         return std::nullopt;
     }
 
+    std::optional<int> rfind(char ch) const;
+
+    std::optional<int> next_word(int start_col) const;
+    std::optional<int> prev_word(int start_col) const;
+
     template<typename P>
     string_fragment find_left_boundary(size_t start,
                                        P&& predicate,
@@ -342,16 +351,22 @@ struct string_fragment {
     {
         assert((int) start <= this->length());
 
+        if (this->empty()) {
+            return *this;
+        }
+
         if (start > 0 && start == static_cast<size_t>(this->length())) {
             start -= 1;
         }
-        while (start > 0) {
+        while (true) {
             if (predicate(this->data()[start])) {
                 count -= 1;
                 if (count == 0) {
                     start += 1;
                     break;
                 }
+            } else if (start == 0) {
+                break;
             }
             start -= 1;
         }
@@ -538,6 +553,35 @@ struct string_fragment {
             });
     }
 
+    template<typename P>
+    split_result rsplit_pair(P&& predicate) const
+    {
+        if (this->empty()) {
+            return std::nullopt;
+        }
+
+        auto curr = this->sf_end - 1;
+        while (curr >= this->sf_begin) {
+            if (predicate(this->sf_string[curr])) {
+                return std::make_pair(
+                    string_fragment{
+                        this->sf_string,
+                        this->sf_begin,
+                        this->sf_begin + curr,
+                    },
+                    string_fragment{
+                        this->sf_string,
+                        this->sf_begin + curr + 1,
+                        this->sf_end,
+                    });
+            }
+
+            curr -= 1;
+        }
+
+        return std::nullopt;
+    }
+
     split_result split_n(int amount) const;
 
     std::vector<string_fragment> split_lines() const;
@@ -545,7 +589,9 @@ struct string_fragment {
     struct tag1 {
         const char t_value;
 
-        bool operator()(char ch) const { return this->t_value == ch; }
+        constexpr explicit tag1(const char value) : t_value(value) {}
+
+        constexpr bool operator()(char ch) const { return this->t_value == ch; }
     };
 
     struct quoted_string_body {
@@ -881,7 +927,7 @@ namespace fmt {
 template<>
 struct formatter<string_fragment> : formatter<string_view> {
     template<typename FormatContext>
-    auto format(const string_fragment& sf, FormatContext& ctx)
+    auto format(const string_fragment& sf, FormatContext& ctx) const
     {
         return formatter<string_view>::format(
             string_view{sf.data(), (size_t) sf.length()}, ctx);

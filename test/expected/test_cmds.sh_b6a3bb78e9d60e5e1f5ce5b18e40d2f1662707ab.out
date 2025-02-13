@@ -196,23 +196,23 @@ can always use [37m[40m q [0m to pop the top view off of the stack.
 
 [4mViews[0m
 
- Key(s)  Action                                            
-═══════════════════════════════════════════════════════════
- [1m?[0m       View/leave this help message.                     
- [1mq[0m       Leave the current view or quit the program when in
-         the log file view.                                
-[1m Q       Similar to [0m[1m[37m[40m q [0m[1m, except it will try to sync the top[0m
-[1m         time between the current and former views. For    [0m
-[1m         example, when leaving the spectrogram view with   [0m
-[1m         [0m[1m[37m[40m Q [0m[1m, the top time in that view will be matched to [0m
-[1m         the top time in the log view.                     [0m
-[1m TAB     Toggle focusing on the filter editor or the main  [0m
-[1m         view.                                             [0m
- ENTER   Focus on the breadcrumb bar.                      
- a/A     Restore the view that was previously popped with  
-         [37m[40m q [0m/[37m[40m Q [0m. The [37m[40m A [0m hotkey will try to match the top 
-         times between the two views.                      
-[1m X       Close the current text file or log file.          [0m
+ Key(s)   Action                                            
+════════════════════════════════════════════════════════════
+ [1m?[0m or [1mF1[0m  View/leave this help message.                     
+ [1mq[0m        Leave the current view or quit the program when in
+          the log file view.                                
+[1m Q        Similar to [0m[1m[37m[40m q [0m[1m, except it will try to sync the top[0m
+[1m          time between the current and former views. For    [0m
+[1m          example, when leaving the spectrogram view with   [0m
+[1m          [0m[1m[37m[40m Q [0m[1m, the top time in that view will be matched to [0m
+[1m          the top time in the log view.                     [0m
+[1m TAB      Toggle focusing on the filter editor or the main  [0m
+[1m          view.                                             [0m
+ ENTER    Focus on the breadcrumb bar.                      
+ a/A      Restore the view that was previously popped with  
+          [37m[40m q [0m/[37m[40m Q [0m. The [37m[40m A [0m hotkey will try to match the top 
+          times between the two views.                      
+[1m X        Close the current text file or log file.          [0m
 
 [4mSpatial Navigation[0m
 
@@ -5101,8 +5101,8 @@ For support questions, email:
    [37m[40m;[0m[1m[36m[40mSELECT[0m[37m[40m [0m[1m[37m[40m*[0m[37m[40m [0m[1m[36m[40mFROM[0m[37m[40m lnav_example_log                    [0m
    [1m[4m[7m log_line [0m[1m[4m [0m[1m[4mlog_part[0m[1m[4m [0m[1m[4m   log_time    [0m[1m[4m [0m[1m[4mlog_actual_time[0m[1m[4m [0m[1m[4m[7mlog_idle_msecs[0m[1m[4m [0m[1m[4mlog_level[0m[1m[4m [0m[1m[4m[7m log_mark [0m[1m[4m [0m[1m[4mlog_comment[0m[1m[4m [0m[1m[4mlog_tags[0m[1m[4m [0m[1m[4mlog_filters[0m[1m[4m [0m[1m[4mex_procname[0m[1m[4m [0m[1m[4m[7mex_duration[0m[1m[4m [0m[1m[4m[7mlog_time_msecs[0m[1m[4m [0m[1m[4mlog_path[0m[1m[4m [0m[1m[4m   log_text    [0m[1m[4m [0m[1m[4m   log_body    [0m[1m[4m [0m
    [1m         0[0m <NULL>   2017-02⋯:06.100 2017-02⋯:06.100 [1m             0[0m info      [1m         0[0m <NULL>      <NULL>   <NULL>      hw          [1m[7m [0m[1m         2[0m [1m[7m [0m[1m1486094706000[0m {TMPDIR}log 2017-02⋯ World! Hello, World!   
-   [1m[7m   [0m[1m      1[0m <NULL>   2017-02⋯:06.200 2017-02⋯:06.200 [1m[7m [0m[1m          100[0m error     [1m         0[0m <NULL>      <NULL>   <NULL>      gw          [1m[7m    [0m[1m      4[0m [1m[7m [0m[1m1486094706000[0m {TMPDIR}log 2017-02⋯ World! Goodbye, World! 
-   [1m[7m       [0m[1m  2[0m[1m [0m[1mnew     [0m[1m [0m[1m2017-02⋯:06.200[0m[1m [0m[1m2017-02⋯:06.200[0m[1m [0m[1m[7m       12[0m[1m00000[0m[1m [0m[1mwarn     [0m[1m [0m[1m         0[0m[1m [0m[1m<NULL>     [0m[1m [0m[1m<NULL>  [0m[1m [0m[1m<NULL>     [0m[1m [0m[1mgw         [0m[1m [0m[1m[7m [0m[1m         1[0m[1m [0m[1m[7m 14860[0m[1m95906000[0m[1m [0m[1m{TMPDIR}log[0m[1m [0m[1m2017-02⋯ World![0m[1m [0m[1mGoodbye, World! [0m
+   [1m[7m[31m   [0m[1m[31m      1[0m[31m [0m[31m<NULL>  [0m[31m [0m[31m2017-02⋯:06.200[0m[31m [0m[31m2017-02⋯:06.200[0m[31m [0m[1m[7m[31m [0m[1m[31m          100[0m[31m [0m[31merror    [0m[31m [0m[1m[31m         0[0m[31m [0m[31m<NULL>     [0m[31m [0m[31m<NULL>  [0m[31m [0m[31m<NULL>     [0m[31m [0m[31mgw         [0m[31m [0m[1m[7m[31m    [0m[1m[31m      4[0m[31m [0m[1m[7m[31m [0m[1m[31m1486094706000[0m[31m [0m[31m{TMPDIR}log[0m[31m [0m[31m2017-02⋯ World![0m[31m [0m[31mGoodbye, World! [0m
+   [1m[7m[33m       [0m[1m[33m  2[0m[1m[33m [0m[1m[33mnew     [0m[1m[33m [0m[1m[33m2017-02⋯:06.200[0m[1m[33m [0m[1m[33m2017-02⋯:06.200[0m[1m[33m [0m[1m[7m[33m       12[0m[1m[33m00000[0m[1m[33m [0m[1m[33mwarn     [0m[1m[33m [0m[1m[33m         0[0m[1m[33m [0m[1m[33m<NULL>     [0m[1m[33m [0m[1m[33m<NULL>  [0m[1m[33m [0m[1m[33m<NULL>     [0m[1m[33m [0m[1m[33mgw         [0m[1m[33m [0m[1m[7m[33m [0m[1m[33m         1[0m[1m[33m [0m[1m[7m[33m 14860[0m[1m[33m95906000[0m[1m[33m [0m[1m[33m{TMPDIR}log[0m[1m[33m [0m[1m[33m2017-02⋯ World![0m[1m[33m [0m[1m[33mGoodbye, World! [0m
    [1m[7m         3[0m[1m [0m[1mnew     [0m[1m [0m[1m2017-02⋯:06.200[0m[1m [0m[1m2017-02⋯:06.200[0m[1m [0m[1m[7m       1800000[0m[1m [0m[1mdebug    [0m[1m [0m[1m         0[0m[1m [0m[1m<NULL>     [0m[1m [0m[1m<NULL>  [0m[1m [0m[1m<NULL>     [0m[1m [0m[1mgw         [0m[1m [0m[1m[7m         10[0m[1m [0m[1m[7m 1486097706000[0m[1m [0m[1m{TMPDIR}log[0m[1m [0m[1m2017-02⋯ World![0m[1m [0m[1mGoodbye, World! [0m
 
 

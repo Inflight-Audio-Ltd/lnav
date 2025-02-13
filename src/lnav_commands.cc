@@ -93,6 +93,7 @@
 #include "text_anonymizer.hh"
 #include "url_handler.cfg.hh"
 #include "url_loader.hh"
+#include "vtab_module.hh"
 #include "yajl/api/yajl_parse.h"
 #include "yajlpp/json_op.hh"
 #include "yajlpp/yajlpp.hh"
@@ -1384,93 +1385,76 @@ json_write_row(yajl_gen handle,
     auto& dls = lnav_data.ld_db_row_source;
     yajlpp_map obj_map(handle);
 
-    for (size_t col = 0; col < dls.dls_headers.size(); col++) {
-        obj_map.gen(dls.dls_headers[col].hm_name);
+    auto cursor = dls.dls_row_cursors[row].sync();
+    for (size_t col = 0; col < dls.dls_headers.size();
+         col++, cursor = cursor->next())
+    {
+        const auto& hm = dls.dls_headers[col];
 
-        if (dls.dls_rows[row][col] == db_label_source::NULL_STR) {
-            obj_map.gen();
-            continue;
-        }
+        obj_map.gen(hm.hm_name);
 
-        auto& hm = dls.dls_headers[col];
+        switch (cursor->get_type()) {
+            case lnav::cell_type::CT_NULL:
+                obj_map.gen();
+                break;
+            case lnav::cell_type::CT_INTEGER:
+                obj_map.gen(cursor->get_int());
+                break;
+            case lnav::cell_type::CT_FLOAT:
+                obj_map.gen(cursor->get_float());
+                break;
+            case lnav::cell_type::CT_TEXT: {
+                if (hm.hm_sub_type == JSON_SUBTYPE) {
+                    unsigned char* err;
+                    json_ptr jp("");
+                    json_op jo(jp);
 
-        switch (hm.hm_column_type) {
-            case SQLITE_FLOAT:
-            case SQLITE_INTEGER: {
-                auto len = strlen(dls.dls_rows[row][col]);
+                    jo.jo_ptr_callbacks = json_op::gen_callbacks;
+                    jo.jo_ptr_data = handle;
+                    auto parse_handle
+                        = yajlpp::alloc_handle(&json_op::ptr_callbacks, &jo);
 
-                if (len == 0) {
-                    obj_map.gen();
+                    const auto json_in = cursor->get_text();
+                    switch (yajl_parse(
+                        parse_handle.in(), json_in.udata(), json_in.length()))
+                    {
+                        case yajl_status_error:
+                        case yajl_status_client_canceled: {
+                            err = yajl_get_error(parse_handle.in(),
+                                                 0,
+                                                 json_in.udata(),
+                                                 json_in.length());
+                            log_error("unable to parse JSON cell: %s", err);
+                            obj_map.gen(cursor->get_text());
+                            yajl_free_error(parse_handle.in(), err);
+                            return;
+                        }
+                        default:
+                            break;
+                    }
+
+                    switch (yajl_complete_parse(parse_handle.in())) {
+                        case yajl_status_error:
+                        case yajl_status_client_canceled: {
+                            err = yajl_get_error(parse_handle.in(),
+                                                 0,
+                                                 json_in.udata(),
+                                                 json_in.length());
+                            log_error("unable to parse JSON cell: %s", err);
+                            obj_map.gen(cursor->get_text());
+                            yajl_free_error(parse_handle.in(), err);
+                            return;
+                        }
+                        default:
+                            break;
+                    }
+                } else if (anonymize) {
+                    obj_map.gen(ta.next(cursor->get_text()));
                 } else {
-                    yajl_gen_number(handle, dls.dls_rows[row][col], len);
+                    obj_map.gen(cursor->get_text());
                 }
                 break;
             }
-            case SQLITE_TEXT:
-                switch (hm.hm_sub_type) {
-                    case 74: {
-                        unsigned char* err;
-                        json_ptr jp("");
-                        json_op jo(jp);
-
-                        jo.jo_ptr_callbacks = json_op::gen_callbacks;
-                        jo.jo_ptr_data = handle;
-                        auto parse_handle = yajlpp::alloc_handle(
-                            &json_op::ptr_callbacks, &jo);
-
-                        const unsigned char* json_in
-                            = (const unsigned char*) dls.dls_rows[row][col];
-                        switch (yajl_parse(parse_handle.in(),
-                                           json_in,
-                                           strlen((const char*) json_in)))
-                        {
-                            case yajl_status_error:
-                            case yajl_status_client_canceled: {
-                                err = yajl_get_error(
-                                    parse_handle.in(),
-                                    0,
-                                    json_in,
-                                    strlen((const char*) json_in));
-                                log_error("unable to parse JSON cell: %s", err);
-                                obj_map.gen(dls.dls_rows[row][col]);
-                                yajl_free_error(parse_handle.in(), err);
-                                return;
-                            }
-                            default:
-                                break;
-                        }
-
-                        switch (yajl_complete_parse(parse_handle.in())) {
-                            case yajl_status_error:
-                            case yajl_status_client_canceled: {
-                                err = yajl_get_error(
-                                    parse_handle.in(),
-                                    0,
-                                    json_in,
-                                    strlen((const char*) json_in));
-                                log_error("unable to parse JSON cell: %s", err);
-                                obj_map.gen(dls.dls_rows[row][col]);
-                                yajl_free_error(parse_handle.in(), err);
-                                return;
-                            }
-                            default:
-                                break;
-                        }
-                        break;
-                    }
-                    default:
-                        obj_map.gen(anonymize
-                                        ? ta.next(string_fragment::from_c_str(
-                                              dls.dls_rows[row][col]))
-                                        : dls.dls_rows[row][col]);
-                        break;
-                }
-                break;
-            default:
-                obj_map.gen(anonymize ? ta.next(string_fragment::from_c_str(
-                                            dls.dls_rows[row][col]))
-                                      : dls.dls_rows[row][col]);
-                break;
         }
     }
 }
@@ -1611,41 +1595,38 @@ com_save_to(exec_context& ec,
     int line_count = 0;
 
     if (args[0] == "write-csv-to") {
-        std::vector<std::vector<const char*>>::iterator row_iter;
-        std::vector<const char*>::iterator iter;
-        std::vector<db_label_source::header_meta>::iterator hdr_iter;
         bool first = true;
 
-        for (hdr_iter = dls.dls_headers.begin();
-             hdr_iter != dls.dls_headers.end();
-             ++hdr_iter)
-        {
+        for (auto& dls_header : dls.dls_headers) {
             if (!first) {
                 fprintf(outfile, ",");
             }
-            csv_write_string(outfile, hdr_iter->hm_name);
+            csv_write_string(outfile, dls_header.hm_name);
             first = false;
         }
         fprintf(outfile, "\n");
 
-        for (row_iter = dls.dls_rows.begin(); row_iter != dls.dls_rows.end();
-             ++row_iter)
-        {
-            if (ec.ec_dry_run && distance(dls.dls_rows.begin(), row_iter) > 10)
-            {
+        ArenaAlloc::Alloc<char> cell_alloc{1024};
+        for (const auto& row_cursor : dls.dls_row_cursors) {
+            if (ec.ec_dry_run && line_count > 10) {
                 break;
             }
 
             first = true;
-            for (iter = row_iter->begin(); iter != row_iter->end(); ++iter) {
+            auto cursor = row_cursor.sync();
+            for (size_t lpc = 0; lpc < dls.dls_headers.size();
+                 lpc++, cursor = cursor->next())
+            {
                 if (!first) {
                     fprintf(outfile, ",");
                 }
-                csv_write_string(
-                    outfile,
-                    anonymize ? ta.next(string_fragment::from_c_str(*iter))
-                              : *iter);
+
+                auto cell_sf = cursor->to_string_fragment(cell_alloc);
+                auto cell_str = anonymize ? ta.next(cell_sf)
+                                          : cell_sf.to_string();
+                csv_write_string(outfile, cell_str);
                 first = false;
+                cell_alloc.reset();
             }
             fprintf(outfile, "\n");
 
@@ -1711,33 +1692,38 @@ com_save_to(exec_context& ec,
         }
         fprintf(outfile, tf == text_format_t::TF_MARKDOWN ? "|\n" : "\u2529\n");
 
+        ArenaAlloc::Alloc<char> cell_alloc{1024};
         for (size_t row = 0; row < dls.text_line_count(); row++) {
             if (ec.ec_dry_run && row > 10) {
                 break;
             }
 
-            for (size_t col = 0; col < dls.dls_headers.size(); col++) {
+            auto cursor = dls.dls_row_cursors[row].sync();
+            for (size_t col = 0; col < dls.dls_headers.size();
+                 col++, cursor = cursor->next())
+            {
                 const auto& hdr = dls.dls_headers[col];
 
                 fprintf(outfile,
                         tf == text_format_t::TF_MARKDOWN ? "|" : "\u2502");
 
-                auto cell = std::string(dls.dls_rows[row][col]);
+                auto sf = cursor->to_string_fragment(cell_alloc);
+                auto cell = attr_line_t::from_table_cell_content(sf, 200);
                 if (anonymize) {
-                    cell = ta.next(cell);
+                    cell = ta.next(cell.al_string);
                 }
-                auto cell_length
-                    = utf8_string_length(cell).unwrapOr(cell.size());
+                auto cell_length = cell.utf8_length_or_length();
                 auto padding = anonymize ? 1 : hdr.hm_column_size - cell_length;
                 auto rjust = hdr.hm_align == text_align_t::end;
 
                 if (rjust) {
                     fprintf(outfile, "%s", std::string(padding, ' ').c_str());
                 }
-                fprintf(outfile, "%s", cell.c_str());
+                fprintf(outfile, "%s", cell.al_string.c_str());
                 if (!rjust) {
                     fprintf(outfile, "%s", std::string(padding, ' ').c_str());
                 }
+                cell_alloc.reset();
             }
             fprintf(outfile,
                     tf == text_format_t::TF_MARKDOWN ? "|\n" : "\u2502\n");
@@ -1768,7 +1754,7 @@ com_save_to(exec_context& ec,
         {
             yajlpp_array root_array(gen);
 
-            for (size_t row = 0; row < dls.dls_rows.size(); row++) {
+            for (size_t row = 0; row < dls.dls_row_cursors.size(); row++) {
                 if (ec.ec_dry_run && row > 10) {
                     break;
                 }
@@ -1783,7 +1769,7 @@ com_save_to(exec_context& ec,
         yajl_gen_config(gen, yajl_gen_beautify, 0);
         yajl_gen_config(gen, yajl_gen_print_callback, yajl_writer, outfile);
 
-        for (size_t row = 0; row < dls.dls_rows.size(); row++) {
+        for (size_t row = 0; row < dls.dls_row_cursors.size(); row++) {
             if (ec.ec_dry_run && row > 10) {
                 break;
             }
@@ -1854,24 +1840,23 @@ com_save_to(exec_context& ec,
         }
     } else if (args[0] == "write-raw-to") {
         if (tc == &lnav_data.ld_views[LNV_DB]) {
-            for (auto row_iter = dls.dls_rows.begin();
-                 row_iter != dls.dls_rows.end();
-                 ++row_iter)
-            {
-                if (ec.ec_dry_run
-                    && distance(dls.dls_rows.begin(), row_iter) > 10)
-                {
+            ArenaAlloc::Alloc<char> cell_alloc{1024};
+            for (const auto& row_cursor : dls.dls_row_cursors) {
+                if (ec.ec_dry_run && line_count > 10) {
                     break;
                 }
 
-                for (auto& iter : *row_iter) {
+                auto cursor = row_cursor.sync();
+                for (size_t lpc = 0; lpc < dls.dls_headers.size();
+                     lpc++, cursor = cursor->next())
+                {
+                    auto sf = cursor->to_string_fragment(cell_alloc);
                     if (anonymize) {
-                        fputs(
-                            ta.next(string_fragment::from_c_str(iter)).c_str(),
-                            outfile);
+                        fputs(ta.next(sf).c_str(), outfile);
                     } else {
-                        fputs(iter, outfile);
+                        fwrite(sf.data(), sf.length(), 1, outfile);
                     }
+                    cell_alloc.reset();
                 }
                 fprintf(outfile, "\n");
 
@@ -2509,9 +2494,8 @@ com_filter(exec_context& ec,
                       .count()
                 / 1000.0;
 
-            retval = fmt::format(
-                FMT_STRING("info: filter activated in {:.3}s"),
-                duration);
+            retval = fmt::format(FMT_STRING("info: filter activated in {:.3}s"),
+                                 duration);
         }
     } else {
         return ec.make_error("expecting a regular expression to filter");
@@ -4498,7 +4482,7 @@ com_summarize(exec_context& ec,
                 lnav_data.ld_views[LNV_DB].reload_data();
                 lnav_data.ld_views[LNV_DB].set_left(0);
 
-                if (dls.dls_rows.size() > 0) {
+                if (dls.dls_row_cursors.size() > 0) {
                     ensure_view(&lnav_data.ld_views[LNV_DB]);
                 }
             }
@@ -4836,58 +4820,80 @@ com_toggle_field(exec_context& ec,
         return ec.make_error("Expecting a log message field name");
     } else {
         auto* tc = *lnav_data.ld_view_stack.top();
+        const auto hide = args[0] == "hide-fields";
+        std::vector<std::string> found_fields, missing_fields;
 
-        if (tc != &lnav_data.ld_views[LNV_LOG]) {
+        if (tc != &lnav_data.ld_views[LNV_LOG]
+            && tc != &lnav_data.ld_views[LNV_DB])
+        {
             retval = "error: hiding fields only works in the log view";
         } else if (ec.ec_dry_run) {
             // TODO: highlight the fields to be hidden.
             retval = "";
         } else {
-            auto& lss = lnav_data.ld_log_source;
-            bool hide = args[0] == "hide-fields";
-            std::vector<std::string> found_fields, missing_fields;
+            if (tc == &lnav_data.ld_views[LNV_DB]) {
+                auto& dls = lnav_data.ld_db_row_source;
 
-            for (int lpc = 1; lpc < (int) args.size(); lpc++) {
-                intern_string_t name;
-                std::shared_ptr<log_format> format;
-                size_t dot;
+                for (size_t lpc = 1; lpc < args.size(); lpc++) {
+                    const auto& name = args[lpc];
 
-                if ((dot = args[lpc].find('.')) != std::string::npos) {
-                    const intern_string_t format_name
-                        = intern_string::lookup(args[lpc].c_str(), dot);
+                    auto col_opt = dls.column_name_to_index(name);
+                    if (col_opt.has_value()) {
+                        found_fields.emplace_back(name);
 
-                    format = log_format::find_root_format(format_name.get());
-                    if (!format) {
-                        return ec.make_error("unknown format -- {}",
-                                             format_name.to_string());
+                        dls.dls_headers[col_opt.value()].hm_hidden = hide;
+                    } else {
+                        missing_fields.emplace_back(name);
                     }
-                    name = intern_string::lookup(&(args[lpc].c_str()[dot + 1]),
-                                                 args[lpc].length() - dot - 1);
-                } else if (tc->get_inner_height() == 0) {
-                    return ec.make_error("no log messages to hide");
-                } else {
-                    auto cl = lss.at(tc->get_selection());
-                    auto lf = lss.find(cl);
-                    format = lf->get_format();
-                    name = intern_string::lookup(args[lpc]);
                 }
+                tc->set_needs_update();
+                tc->reload_data();
+            } else if (tc == &lnav_data.ld_views[LNV_LOG]) {
+                const auto& lss = lnav_data.ld_log_source;
 
-                if (format->hide_field(name, hide)) {
-                    found_fields.push_back(args[lpc]);
-                    if (hide) {
-                        if (lnav_data.ld_rl_view != nullptr) {
-                            lnav_data.ld_rl_view->set_alt_value(
-                                HELP_MSG_1(x,
-                                           "to quickly show hidden "
-                                           "fields"));
+                for (int lpc = 1; lpc < (int) args.size(); lpc++) {
+                    intern_string_t name;
+                    std::shared_ptr<log_format> format;
+                    size_t dot;
+
+                    if ((dot = args[lpc].find('.')) != std::string::npos) {
+                        const intern_string_t format_name
+                            = intern_string::lookup(args[lpc].c_str(), dot);
+
+                        format
+                            = log_format::find_root_format(format_name.get());
+                        if (!format) {
+                            return ec.make_error("unknown format -- {}",
+                                                 format_name.to_string());
                         }
+                        name = intern_string::lookup(
+                            &(args[lpc].c_str()[dot + 1]),
+                            args[lpc].length() - dot - 1);
+                    } else if (tc->get_inner_height() == 0) {
+                        return ec.make_error("no log messages to hide");
+                    } else {
+                        auto cl = lss.at(tc->get_selection());
+                        auto lf = lss.find(cl);
+                        format = lf->get_format();
+                        name = intern_string::lookup(args[lpc]);
                     }
-                    tc->set_needs_update();
-                } else {
-                    missing_fields.push_back(args[lpc]);
+
+                    if (format->hide_field(name, hide)) {
+                        found_fields.push_back(args[lpc]);
+                        if (hide) {
+                            if (lnav_data.ld_rl_view != nullptr) {
+                                lnav_data.ld_rl_view->set_alt_value(
+                                    HELP_MSG_1(x,
+                                               "to quickly show hidden "
+                                               "fields"));
+                            }
+                        }
+                        tc->set_needs_update();
+                    } else {
+                        missing_fields.push_back(args[lpc]);
+                    }
                 }
             }
-
             if (missing_fields.empty()) {
                 auto visibility = hide ? "hiding" : "showing";
                 retval = fmt::format(FMT_STRING("info: {} field(s) -- {}"),
@@ -5231,6 +5237,9 @@ com_sh(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
                     [&pair](double val) {
                         setenv(
                             pair.first.c_str(), fmt::to_string(val).c_str(), 1);
+                    },
+                    [&pair](bool val) {
+                        setenv(pair.first.c_str(), val ? "1" : "0", 1);
                     });
             }
 
@@ -5740,8 +5749,7 @@ com_spectrogram(exec_context& ec,
 
         ss.ss_granularity = ZOOM_LEVELS[lnav_data.ld_zoom_level];
         if (ss.ss_value_source != nullptr) {
-            delete ss.ss_value_source;
-            ss.ss_value_source = nullptr;
+            delete std::exchange(ss.ss_value_source, nullptr);
         }
         ss.invalidate();
 

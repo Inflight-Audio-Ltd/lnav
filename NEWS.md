@@ -4,6 +4,16 @@ Features:
 * Log message timestamps are now represented with microsecond
   precision internally instead of just millisecond.
 * The `log_time` and `log_level` fields can now be hidden.
+* The "Op ID:" overlay that is added when the `log_opid` field is
+  manually set on a message can now be hidden by hiding the
+  `log_opid` field.
+* Pasting a command snippet when the input focus is on the main
+  view will now execute it.
+  For this to work: the terminal must support "bracketed-paste"
+  mode, which most do;
+  and, the pasted content must also start with one of the sigils
+  for the desired operation (i.e. `:` for lnav commands, `;` for SQL
+  queries, `/` for searches, and `|` for scripts).
 * Added a `report-access-log` script that generates a report that
   is similar to the output of the [goaccess](https://goaccess.io)
   utility.
@@ -27,11 +37,15 @@ Features:
 * Added `italic` and `strike` to the text styling configuration.
 * DB query results can now be styled on a row-by-row basis by
   adding a column with the name `__lnav_style__`.
-* Added "format <format-name> test" management command to make it
-  easier to test a format against a file.
-  Can be helpful for determining why a file is not being recognized
-  by particular format.
+* Added `format <format-name> test <path>` management command
+  to make it easier to test a format against a file.
+  This can be helpful for determining why a file is not being
+  recognized by particular format.
 * Added a "performance" section to the documentation.
+* Session exports now include `:hide-fields` and `:show-fields`
+  commands from the session.
+  They are currently commented out by default.
+* Added highlighting for Markdown syntax.
 
 Interface changes:
 * DB query results that start with a number are right justified
@@ -49,6 +63,28 @@ Interface changes:
   an error.
 * The DB view will now chart result columns that contain a number
   with a unit, like "KB", "MB", "GB", etc...
+* When switching to the pretty view, the focused line should be
+  in the same position in the text as in the source view.
+* In the LOG view, you can now copy the value of a field by
+  pressing `c` when focused on a line in the parser details
+  overlay (activated by pressing `p`).
+* In the DB View, if there is a column named `log_level`, it
+  will be used as the level for the row and the hotkeys for
+  jumping to the next/previous error/warning will work.
+* In the DB View, columns can now be hidden/shown using the
+  `:hide-fields` / `:show-fields` commands.
+* In the DB View, pressing `p` now works for all rows and will
+  show all columns and not just JSON ones.
+  You can then press `c` while focused in the overlay to copy
+  the value of the column.
+  Pressing space while focused on a column in the overlay will
+  hide/show it.
+* If the terminal supports less than 256 colors, a help message
+  will be displayed to try setting `TERM` to `xterm-256color`.
+* Added `F1` as a hotkey to open the help view.
+* Fixed some issues with scrolling in the main view when:
+  word-wrap was enabled; log messages had tags/comments; or
+  if the parser details overlay was open.
 
 Breaking changes:
 * The `parse_url()` SQL function no longer raises an error for an
@@ -64,6 +100,7 @@ Bug Fixes:
 * Reduced indexing time for plain text and JSON-lines logs.
 * Reduced memory footprint.
 * Improved search performance.
+* Reduced DB view CPU and memory usage.
 * Reduce time to open help text.
 * Improved performance of log virtual tables when ordering the
   result by `log_line DESC`.
@@ -71,6 +108,7 @@ Bug Fixes:
 
 Maintenance:
 * Replaced ncurses with notcurses.
+* Added arm64 builds for Linux/macOS
 
 ## lnav v0.12.3
 
@@ -156,7 +194,7 @@ Features:
     row and dragging will scroll the view as needed;
   - shift + clicking/dragging in the main view will highlight
     lines and then toggle their bookmark status on release;
-  - double-clicking in the main view will select the underlying 
+  - double-clicking in the main view will select the underlying
     text and drag-selecting within a line will select the given
     text;
   - when double-clicking text: if the mouse pointer is inside
@@ -193,7 +231,7 @@ Features:
   - clicking in a prompt will move the cursor to the location;
   - clicking on a column in the spectrogram view will select it.
 
-  (Note that this is new work, so there are likely to be some 
+  (Note that this is new work, so there are likely to be some
   glitches.)
 * Added a `journald://` URL handler that will call `journalctl`
   and pass any query parameters as options.  For example, the

@@ -238,14 +238,13 @@ md2attr_line::leave_block(const md4cpp::event_handler::block& bl)
         if (tf_opt) {
             static const auto highlighters = get_highlight_map();
 
-            lnav::document::discover_structure(
-                block_text, line_range{0, -1}, tf_opt.value());
+            lnav::document::discover(block_text)
+                .with_text_format(tf_opt.value())
+                .perform();
             for (const auto& hl_pair : highlighters) {
                 const auto& hl = hl_pair.second;
 
-                if (!hl.h_text_formats.empty()
-                    && hl.h_text_formats.count(tf_opt.value()) == 0)
-                {
+                if (!hl.applies_to_format(tf_opt.value())) {
                     continue;
                 }
                 hl.annotate(block_text, 0);

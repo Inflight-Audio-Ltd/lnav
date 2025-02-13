@@ -65,6 +65,7 @@ DUMMY_OBJS = \
 	test_stubs.$(OBJEXT)
 
 check_PROGRAMS = \
+    document.sections.tests \
 	drive_data_scanner \
 	drive_doc_discovery \
 	drive_line_buffer \
@@ -75,6 +76,7 @@ check_PROGRAMS = \
 	drive_shlexer \
 	drive_sql \
 	drive_sql_anno \
+	drive_textinput \
 	drive_view_colors \
 	drive_vt52_curses \
 	drive_readline_curses \
@@ -166,6 +168,8 @@ test_reltime_SOURCES = test_reltime.cc
 
 lnav_doctests_SOURCES = lnav_doctests.cc
 
+document_sections_tests_SOURCES = document.sections.tests.cc
+
 drive_line_buffer_SOURCES = drive_line_buffer.cc
 
 drive_grep_proc_SOURCES = drive_grep_proc.cc
@@ -193,6 +197,8 @@ drive_readline_curses_SOURCES = drive_readline_curses.cc
 drive_sql_SOURCES = drive_sql.cc
 
 drive_sql_anno_SOURCES = drive_sql_anno.cc
+
+drive_textinput_SOURCES = drive_textinput.cc
 
 slicer_SOURCES = slicer.cc
 
@@ -353,6 +359,8 @@ dist_noinst_DATA = \
 	logfile_invalid_json2.json \
 	logfile_mixed_json2.json \
 	logfile_mux_zookeeper.0 \
+	logfile_java.0 \
+	logfile_java.1 \
 	logfile_journald.json \
 	logfile_json.json \
 	logfile_json2.json \
@@ -536,9 +544,9 @@ DISABLED_TESTS = \
 	test_grep_proc.sh \
 	test_remote.sh \
 	test_top_status \
-	test_tui.sh \
 	test_line_buffer2 \
     test_line_buffer.sh \
+    test_tui.sh \
     test_vt52_curses.sh
 
 if HAVE_LIBCURL
