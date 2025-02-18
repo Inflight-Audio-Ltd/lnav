@@ -35,7 +35,7 @@ $(HLP): ../src/help.txt
 	cp $? $(shell dirname $@)/
 	gzip $(subst .gz,,$@)
 
-$(MAN): ../docs/build/man/lnav.1
+$(MAN): ../lnav.1
 	@mkdir -p $(shell dirname $@)
 	cp $? $(shell dirname $@)/
 	gzip $(subst .gz,,$@)
