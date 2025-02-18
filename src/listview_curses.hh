@@ -486,7 +486,7 @@ public:
 
     bool handle_mouse(mouse_event& me) override;
 
-    bool contains(int x, int y) const override;
+    std::optional<view_curses*> contains(int x, int y) override;
 
     listview_curses& set_tail_space(vis_line_t space)
     {
@@ -534,6 +534,10 @@ public:
                                                          static_overlay_content,
                                                          overlay_content,
                                                          empty_space>;
+
+    int get_y_for_selection() const;
+
+    std::optional<role_t> lv_border_left_role;
 
 protected:
     void delegate_scroll_out()

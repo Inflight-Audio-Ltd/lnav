@@ -43,6 +43,7 @@
 #include "sysclip.hh"
 #include "ww898/cp_utf8.hpp"
 
+using namespace std::chrono_literals;
 using namespace lnav::roles::literals;
 
 const attr_line_t&
@@ -119,9 +120,12 @@ textinput_curses::get_help_text()
 
 textinput_curses::textinput_curses()
 {
+    this->vc_enabled = false;
     this->vc_children.emplace_back(&this->tc_popup);
 
-    this->tc_popup_source.set_reverse_selection(true);
+    this->tc_popup.tc_cursor_role = role_t::VCR_CURSOR_LINE;
+    this->tc_popup.tc_disabled_cursor_role = role_t::VCR_DISABLED_CURSOR_LINE;
+    this->tc_popup.lv_border_left_role = role_t::VCR_POPUP_BORDER;
     this->tc_popup.set_visible(false);
     this->tc_popup.set_title("textinput popup");
     this->tc_popup.set_selectable(true);
@@ -137,6 +141,8 @@ textinput_curses::textinput_curses()
     this->tc_help_view.set_sub_source(&this->tc_help_source);
 
     this->tc_help_source.replace_with(get_help_text());
+
+    this->set_content("");
 }
 
 void
@@ -144,7 +150,14 @@ textinput_curses::set_content(const attr_line_t& al)
 {
     auto al_copy = al;
 
+    if (!this->tc_prefix.empty()) {
+        al_copy.insert(0, this->tc_prefix);
+    }
     highlight_syntax(this->tc_text_format, al_copy);
+    if (!this->tc_prefix.empty()) {
+        // XXX yuck
+        al_copy.erase(0, this->tc_prefix.al_string.size());
+    }
     this->tc_doc_meta = lnav::document::discover(al_copy)
                             .with_text_format(this->tc_text_format)
                             .save_words()
@@ -160,6 +173,9 @@ textinput_curses::set_content(const attr_line_t& al)
                           .c_str());
         });
     this->tc_lines = al_copy.split_lines();
+    if (endswith(al_copy.al_string, "\n")) {
+        this->tc_lines.emplace_back();
+    }
     if (this->tc_lines.empty()) {
         this->tc_lines.emplace_back();
     } else {
@@ -168,13 +184,24 @@ textinput_curses::set_content(const attr_line_t& al)
     this->tc_left = 0;
     this->tc_top = 0;
     this->tc_cursor = {};
+    this->clamp_point(this->tc_cursor);
+    this->set_needs_update();
 }
 
-bool
-textinput_curses::contains(int x, int y) const
+std::optional<view_curses*>
+textinput_curses::contains(int x, int y)
 {
-    return this->vc_x <= x && x < this->vc_x + this->vc_width && this->vc_y <= y
-        && y < this->vc_y + this->tc_height;
+    auto child = view_curses::contains(x, y);
+    if (child) {
+        return child;
+    }
+
+    if (this->vc_x <= x && x < this->vc_x + this->vc_width && this->vc_y <= y
+        && y < this->vc_y + this->tc_height)
+    {
+        return this;
+    }
+    return std::nullopt;
 }
 
 bool
@@ -188,6 +215,7 @@ textinput_curses::handle_mouse(mouse_event& me)
               me.me_x,
               me.me_y);
     this->tc_notice = std::nullopt;
+    this->tc_last_tick_after_input = std::nullopt;
     if (this->tc_mode == mode_t::show_help) {
         return this->tc_help_view.handle_mouse(me);
     }
@@ -226,6 +254,7 @@ textinput_curses::handle_mouse(mouse_event& me)
         auto sel_range
             = selected_range::from_mouse(inner_press_point, inner_point);
 
+        this->tc_popup_type = popup_type_t::none;
         this->tc_popup.set_visible(false);
         this->tc_complete_range = std::nullopt;
         this->tc_cursor = inner_point;
@@ -503,6 +532,7 @@ bool
 textinput_curses::handle_key(const ncinput& ch)
 {
     this->tc_notice = std::nullopt;
+    this->tc_last_tick_after_input = std::nullopt;
     switch (this->tc_mode) {
         case mode_t::searching:
             return this->handle_search_key(ch);
@@ -657,6 +687,13 @@ textinput_curses::handle_key(const ncinput& ch)
                 this->update_lines();
                 return true;
             }
+            case 'r':
+            case 'R': {
+                if (this->tc_on_history) {
+                    this->tc_on_history(*this);
+                }
+                return true;
+            }
             case 's':
             case 'S': {
                 log_debug("switching to search mode from edit");
@@ -709,6 +746,7 @@ textinput_curses::handle_key(const ncinput& ch)
             case 'x':
             case 'X': {
                 log_debug("performing action");
+                this->blur();
                 if (this->tc_on_perform) {
                     this->tc_on_perform(*this);
                 }
@@ -752,11 +790,12 @@ textinput_curses::handle_key(const ncinput& ch)
         case NCKEY_ESC:
         case KEY_CTRL(']'): {
             if (this->tc_popup.is_visible()) {
+                this->tc_popup_type = popup_type_t::none;
                 this->tc_popup.set_visible(false);
                 this->tc_complete_range = std::nullopt;
                 this->set_needs_update();
-            } else if (this->tc_on_abort) {
-                this->tc_on_abort(*this);
+            } else {
+                this->abort();
             }
 
             this->tc_selection = std::nullopt;
@@ -765,12 +804,17 @@ textinput_curses::handle_key(const ncinput& ch)
         }
         case NCKEY_ENTER: {
             if (this->tc_popup.is_visible()) {
+                this->tc_popup_type = popup_type_t::none;
+                this->tc_popup.set_visible(false);
                 if (this->tc_on_completion) {
                     this->tc_on_completion(*this);
                 }
-                this->tc_popup.set_visible(false);
-                this->tc_complete_range = std::nullopt;
                 this->set_needs_update();
+            } else if (this->tc_height == 1) {
+                this->blur();
+                if (this->tc_on_perform) {
+                    this->tc_on_perform(*this);
+                }
             } else {
                 if (!this->tc_selection) {
                     this->tc_selection
@@ -789,12 +833,23 @@ textinput_curses::handle_key(const ncinput& ch)
         }
         case NCKEY_TAB: {
             if (this->tc_popup.is_visible()) {
+                this->tc_popup_type = popup_type_t::none;
+                this->tc_popup.set_visible(false);
                 if (this->tc_on_completion) {
                     this->tc_on_completion(*this);
                 }
-                this->tc_popup.set_visible(false);
-                this->tc_complete_range = std::nullopt;
                 this->set_needs_update();
+            } else if (!this->tc_suggestion.empty()
+                       && this->tc_lines[this->tc_cursor.y].column_width()
+                           == this->tc_cursor.x)
+            {
+                this->tc_selection = selected_range::from_key(this->tc_cursor,
+                                                              this->tc_cursor);
+                this->replace_selection(this->tc_suggestion);
+            } else if (this->tc_height == 1) {
+                if (this->tc_on_completion_request) {
+                    this->tc_on_completion_request(*this);
+                }
             } else if (!this->tc_selection) {
                 auto indent_amount = 4;
                 auto line_sf
@@ -835,7 +890,7 @@ textinput_curses::handle_key(const ncinput& ch)
                 this->tc_cursor.x
                     = indent.length() - before.length() + old_cursor.x;
             }
-            break;
+            return true;
         }
         case KEY_CTRL('_'): {
             if (this->tc_change_log.empty()) {
@@ -886,7 +941,9 @@ textinput_curses::handle_key(const ncinput& ch)
             break;
         }
         case NCKEY_BACKSPACE: {
-            if (!this->tc_selection) {
+            if (this->tc_lines.size() == 1 && this->tc_lines.front().empty()) {
+                this->abort();
+            } else if (!this->tc_selection) {
                 auto line_sf
                     = this->tc_lines[this->tc_cursor.y].to_string_fragment();
                 const auto [before, after]
@@ -926,6 +983,10 @@ textinput_curses::handle_key(const ncinput& ch)
         case NCKEY_UP: {
             if (this->tc_popup.is_visible()) {
                 this->tc_popup.handle_key(ch);
+            } else if (this->tc_height == 1) {
+                if (this->tc_on_history) {
+                    this->tc_on_history(*this);
+                }
             } else {
                 if (ncinput_shift_p(&ch)) {
                     log_debug("up shift");
@@ -1067,7 +1128,9 @@ textinput_curses::ensure_cursor_visible()
             this->tc_top -= 1;
         }
     }
-    if (this->tc_cursor.y + 1 >= this->tc_top + dim.dr_height) {
+    if (this->tc_height > 1
+        && this->tc_cursor.y + 1 >= this->tc_top + dim.dr_height)
+    {
         this->tc_top = (this->tc_cursor.y + 1 - dim.dr_height) + 1;
     }
     if (this->tc_top + dim.dr_height > this->tc_lines.size()) {
@@ -1207,6 +1270,8 @@ textinput_curses::replace_selection_no_change(string_fragment sf)
     this->tc_drag_selection = std::nullopt;
     this->update_lines();
 
+    ensure(!this->tc_lines.empty());
+
     return retval;
 }
 
@@ -1258,6 +1323,7 @@ textinput_curses::move_cursor_by(movement move)
             this->tc_cursor.y += 1;
         }
     }
+    this->clamp_point(this->tc_cursor);
     this->tc_drag_selection = std::nullopt;
     this->tc_selection = std::nullopt;
     this->ensure_cursor_visible();
@@ -1277,13 +1343,27 @@ textinput_curses::update_lines()
 {
     auto content = attr_line_t(this->get_content());
 
+    if (!this->tc_prefix.empty()) {
+        content.insert(0, this->tc_prefix);
+    }
     highlight_syntax(this->tc_text_format, content);
+    if (!this->tc_prefix.empty()) {
+        // XXX yuck
+        content.erase(0, this->tc_prefix.al_string.size());
+    }
     this->tc_doc_meta = lnav::document::discover(content)
                             .with_text_format(this->tc_text_format)
                             .save_words()
                             .perform();
     this->tc_lines = content.split_lines();
-    this->apply_highlights();
+    if (endswith(content.al_string, "\n")) {
+        this->tc_lines.emplace_back();
+    }
+    if (this->tc_lines.empty()) {
+        this->tc_lines.emplace_back();
+    } else {
+        this->apply_highlights();
+    }
     this->ensure_cursor_visible();
 
     this->tc_popup.set_visible(false);
@@ -1291,6 +1371,11 @@ textinput_curses::update_lines()
     if (this->tc_on_change) {
         this->tc_on_change(*this);
     }
+    if (!this->tc_popup.is_visible()) {
+        this->tc_popup_type = popup_type_t::none;
+    }
+
+    ensure(!this->tc_lines.empty());
 }
 
 textinput_curses::dimension_result
@@ -1303,11 +1388,11 @@ textinput_curses::get_visible_dimensions() const
 
     if (this->vc_y < retval.dr_full_height) {
         retval.dr_height = std::min((int) retval.dr_full_height - this->vc_y,
-                                    this->vc_y + this->tc_height);
+                                    this->tc_height);
     }
     if (this->vc_x < retval.dr_full_width) {
-        retval.dr_width = std::min(retval.dr_full_width - this->vc_x,
-                                   this->vc_x + (unsigned) this->vc_width);
+        retval.dr_width = std::min((long) retval.dr_full_width - this->vc_x,
+                                   this->vc_width);
     }
     return retval;
 }
@@ -1323,7 +1408,10 @@ textinput_curses::get_content(bool trim) const
         if (trim) {
             line_sf = line_sf.rtrim(" ");
         }
-        retval.append(line_sf.data(), line_sf.length()).append("\n");
+        if (!retval.empty()) {
+            retval.push_back('\n');
+        }
+        retval.append(line_sf.data(), line_sf.length());
     }
     return retval;
 }
@@ -1331,19 +1419,48 @@ textinput_curses::get_content(bool trim) const
 void
 textinput_curses::focus()
 {
+    if (!this->vc_enabled) {
+        this->vc_enabled = true;
+        if (this->tc_on_focus) {
+            this->tc_on_focus(*this);
+        }
+        this->set_needs_update();
+    }
+
     if (this->tc_mode == mode_t::show_help) {
         notcurses_cursor_disable(ncplane_notcurses(this->tc_window));
         return;
     }
+    auto term_x = this->vc_x + this->tc_cursor.x - this->tc_left;
+    if (this->tc_cursor.y == 0) {
+        term_x += this->tc_prefix.column_width();
+    }
     notcurses_cursor_enable(ncplane_notcurses(this->tc_window),
                             this->vc_y + this->tc_cursor.y - this->tc_top,
-                            this->vc_x + this->tc_cursor.x - this->tc_left);
+                            term_x);
 }
 
 void
 textinput_curses::blur()
 {
+    this->tc_popup_type = popup_type_t::none;
+    this->tc_popup.set_visible(false);
+    this->vc_enabled = false;
+    if (this->tc_on_blur) {
+        this->tc_on_blur(*this);
+    }
+
     notcurses_cursor_disable(ncplane_notcurses(this->tc_window));
+    this->set_needs_update();
+}
+
+void
+textinput_curses::abort()
+{
+    this->blur();
+    if (this->tc_on_abort) {
+        this->tc_on_abort(*this);
+    }
 }
 
 bool
@@ -1352,9 +1469,29 @@ textinput_curses::do_update()
     static auto& vc = view_colors::singleton();
     auto retval = false;
 
+    if (!this->is_visible()) {
+        return retval;
+    }
+
     if (!this->vc_needs_update) {
-        log_debug("skip update");
         return view_curses::do_update();
+    }
+
+    auto dim = this->get_visible_dimensions();
+    if (!this->vc_enabled) {
+        ncplane_erase_region(
+            this->tc_window, this->vc_y, this->vc_x, 1, dim.dr_width);
+        if (!this->tc_inactive_value.empty()) {
+            auto lr = line_range{this->tc_left, this->tc_left + dim.dr_width};
+            mvwattrline(this->tc_window,
+                        this->vc_y,
+                        this->vc_x,
+                        this->tc_inactive_value,
+                        lr);
+            return true;
+        }
+
+        return false;
     }
 
     if (this->tc_mode == mode_t::show_help) {
@@ -1368,12 +1505,22 @@ textinput_curses::do_update()
         return view_curses::do_update();
     }
 
-    log_debug("render input");
     retval = true;
-    auto dim = this->get_visible_dimensions();
     auto row_count = this->tc_lines.size();
     auto y = this->vc_y;
     auto y_max = this->vc_y + dim.dr_height;
+    if (row_count == 1 && this->tc_lines[0].empty()
+        && !this->tc_suggestion.empty())
+    {
+        ncplane_erase_region(this->tc_window, y, this->vc_x, 1, dim.dr_width);
+        auto al = attr_line_t(this->tc_suggestion)
+                      .with_attr_for_all(VC_ROLE.value(role_t::VCR_SUGGESTION));
+        al.insert(0, this->tc_prefix);
+        auto lr = line_range{this->tc_left, this->tc_left + dim.dr_width};
+        mvwattrline(this->tc_window, y, this->vc_x, al, lr);
+        row_count -= 1;
+        y += 1;
+    }
     for (auto curr_line = this->tc_top; curr_line < row_count && y < y_max;
          curr_line++, y++)
     {
@@ -1407,6 +1554,17 @@ textinput_curses::do_update()
                         },
                         VC_ROLE.value(role_t::VCR_SEARCH));
                 });
+        }
+        if (!this->tc_suggestion.empty() && !this->tc_popup.is_visible()
+            && curr_line == this->tc_cursor.y
+            && this->tc_cursor.x == al.column_width()
+            && (al.empty() || al.al_string.back() == ' '))
+        {
+            al.append(this->tc_suggestion,
+                      VC_ROLE.value(role_t::VCR_SUGGESTION));
+        }
+        if (curr_line == 0) {
+            al.insert(0, this->tc_prefix);
         }
         auto mvw_res = mvwattrline(this->tc_window, y, this->vc_x, al, lr);
     }
@@ -1512,25 +1670,36 @@ textinput_curses::open_popup_for_completion(
     size_t left, std::vector<attr_line_t> possibilities)
 {
     if (possibilities.empty()) {
+        this->tc_popup_type = popup_type_t::none;
         return;
     }
 
+    this->tc_popup_type = popup_type_t::completion;
     auto dim = this->get_visible_dimensions();
-    auto max_width = possibilities | lnav::itertools::map([](const auto& elem) {
-                         return elem.column_width();
-                     })
+    auto max_width = possibilities
+        | lnav::itertools::map(&attr_line_t::column_width)
         | lnav::itertools::max();
 
-    auto full_width = std::min((int) max_width.value_or(1) + 2, dim.dr_width);
-    auto popup_height
-        = vis_line_t(std::min(this->tc_max_popup_height, possibilities.size()));
+    auto full_width = std::min((int) max_width.value_or(1) + 3, dim.dr_width);
+    auto new_sel = 0_vl;
+    auto popup_height = vis_line_t(
+        std::min(this->tc_max_popup_height, possibilities.size() + 1));
     auto rel_x = left;
+    if (this->tc_cursor.y == 0) {
+        rel_x += this->tc_prefix.column_width();
+    }
     if (rel_x + full_width > dim.dr_width) {
         rel_x = dim.dr_width - full_width;
     }
-    auto rel_y = this->tc_cursor.y - this->tc_top + 1;
-    if (this->vc_y + rel_y + popup_height > dim.dr_full_height) {
-        rel_y = this->tc_cursor.y - this->tc_top - popup_height;
+    if (this->vc_x + rel_x > 0) {
+        rel_x -= 1;  // XXX for border
+    }
+    auto rel_y = this->tc_cursor.y - this->tc_top - popup_height;
+    if (this->vc_y + rel_y < 0) {
+        rel_y = this->tc_cursor.y - this->tc_top + 1;
+    } else {
+        std::reverse(possibilities.begin(), possibilities.end());
+        new_sel = vis_line_t(possibilities.size() - 1);
     }
 
     this->tc_complete_range = selected_range::from_key(
@@ -1542,7 +1711,8 @@ textinput_curses::open_popup_for_completion(
     this->tc_popup.set_width(full_width);
     this->tc_popup.set_height(popup_height);
     this->tc_popup.set_visible(true);
-    this->tc_popup.set_selection(0_vl);
+    this->tc_popup.set_top(0_vl);
+    this->tc_popup.set_selection(new_sel);
     this->set_needs_update();
 }
 
@@ -1550,16 +1720,56 @@ void
 textinput_curses::open_popup_for_history(std::vector<attr_line_t> possibilities)
 {
     if (possibilities.empty()) {
+        this->tc_popup_type = popup_type_t::none;
         return;
     }
+
+    this->tc_popup_type = popup_type_t::history;
+    auto dim = this->get_visible_dimensions();
+    auto new_sel = 0_vl;
+    auto popup_height = vis_line_t(
+        std::min(this->tc_max_popup_height, possibilities.size() + 1));
+    auto rel_y = this->tc_cursor.y - this->tc_top - popup_height;
+    if (this->vc_y + rel_y < 0) {
+        rel_y = this->tc_cursor.y - this->tc_top - popup_height;
+    } else {
+        std::reverse(possibilities.begin(), possibilities.end());
+        new_sel = vis_line_t(possibilities.size() - 1);
+    }
+
+    this->tc_complete_range = selected_range::from_key(
+        input_point{},
+        input_point{
+            (int) this->tc_lines.back().column_width(),
+            (int) this->tc_lines.size() - 1,
+        });
     this->tc_popup_source.replace_with(possibilities);
     this->tc_popup.set_window(this->tc_window);
+    this->tc_popup.set_title("History");
     this->tc_popup.set_x(this->vc_x);
-    this->tc_popup.set_y(this->vc_y + 1);
+    this->tc_popup.set_y(this->vc_y + rel_y);
     this->tc_popup.set_width(this->vc_width);
-    this->tc_popup.set_height(
-        vis_line_t(std::min(this->tc_max_popup_height, possibilities.size())));
+    this->tc_popup.set_height(popup_height);
+    this->tc_popup.set_top(0_vl);
+    this->tc_popup.set_selection(new_sel);
     this->tc_popup.set_visible(true);
-    this->tc_popup.set_selection(0_vl);
     this->set_needs_update();
+}
+
+void
+textinput_curses::tick(ui_clock::time_point now)
+{
+    if (this->tc_last_tick_after_input) {
+        auto diff = now - this->tc_last_tick_after_input.value();
+
+        if (diff >= 750ms && !this->tc_timeout_fired) {
+            if (this->tc_on_timeout) {
+                this->tc_on_timeout(*this);
+            }
+            this->tc_timeout_fired = true;
+        }
+    } else {
+        this->tc_last_tick_after_input = now;
+        this->tc_timeout_fired = false;
+    }
 }

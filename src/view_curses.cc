@@ -194,25 +194,26 @@ view_curses::handle_mouse(mouse_event& me)
     return false;
 }
 
-bool
-view_curses::contains(int x, int y) const
+std::optional<view_curses*>
+view_curses::contains(int x, int y)
 {
     if (!this->vc_visible) {
-        return false;
+        return std::nullopt;
     }
 
     for (auto* child : this->vc_children) {
-        if (child->contains(x, y)) {
-            return true;
+        auto contains_res = child->contains(x, y);
+        if (contains_res) {
+            return contains_res;
         }
     }
     if (this->vc_x <= x
         && (this->vc_width < 0 || x < this->vc_x + this->vc_width)
         && this->vc_y == y)
     {
-        return true;
+        return this;
     }
-    return false;
+    return std::nullopt;
 }
 
 void
@@ -1138,6 +1139,8 @@ view_colors::init_roles(const lnav_theme& lt,
 
     this->get_role_attrs(role_t::VCR_POPUP)
         = this->to_attrs(lt, lt.lt_style_popup, reporter);
+    this->get_role_attrs(role_t::VCR_POPUP_BORDER)
+        = this->to_attrs(lt, lt.lt_style_popup_border, reporter);
     this->get_role_attrs(role_t::VCR_FOCUSED)
         = this->to_attrs(lt, lt.lt_style_focused, reporter);
     this->get_role_attrs(role_t::VCR_DISABLED_FOCUSED)
@@ -1336,8 +1339,9 @@ screen_curses::create(const notcurses_options& options)
         check_experimental("mouse")
             || lnav_config.lc_mouse_mode == lnav_mouse_mode::enabled);
 
-    log_info("notcurses detected terminal: %s",
-             notcurses_detected_terminal(nc));
+    auto_mem<char> term_name;
+    term_name = notcurses_detected_terminal(nc);
+    log_info("notcurses detected terminal: %s", term_name.in());
 
     return Ok(screen_curses(nc));
 }
