@@ -34,6 +34,7 @@
 
 #include "base/from_trait.hh"
 #include "byte_array.hh"
+#include "cmd.parser.hh"
 #include "data_scanner.hh"
 #include "doctest/doctest.h"
 #include "lnav_config.hh"
@@ -81,8 +82,43 @@ TEST_CASE("shlex::eval")
     CHECK(out == "foo");
 }
 
+TEST_CASE("lnav::command::parse_for_prompt")
+{
+    static const auto SEARCH_HELP
+        = help_text("search", "search the view for a pattern")
+              .with_parameter(
+                  help_text("pattern", "The pattern to search for")
+                      .with_format(help_parameter_format_t::HPF_REGEX));
+
+    exec_context ec;
+    {
+        auto sf = "Word "_frag;
+        auto parse_res = lnav::command::parse_for_prompt(ec, sf, SEARCH_HELP);
+        auto arg = parse_res.arg_at(5);
+        CHECK(arg.has_value());
+        CHECK(arg->aar_help == &SEARCH_HELP.ht_parameters[0]);
+        CHECK(arg->aar_element.se_origin.empty());
+    }
+    {
+        auto sf = "abc\\"_frag;
+        auto parse_res = lnav::command::parse_for_prompt(ec, sf, SEARCH_HELP);
+        auto arg = parse_res.arg_at(4);
+        CHECK(arg.has_value());
+        CHECK(arg->aar_element.se_value == "abc\\");
+    }
+}
+
 TEST_CASE("shlex::split")
 {
+    {
+        std::string cmdline1 = "abc\\";
+        shlex lexer(cmdline1);
+        auto split_res = lexer.split(scoped_resolver{});
+        CHECK(split_res.isErr());
+        auto se = split_res.unwrapErr();
+        CHECK(se.se_elements.size() == 1);
+        CHECK(se.se_elements[0].se_value == cmdline1);
+    }
     {
         std::string cmdline1 = "";
 
@@ -167,7 +203,7 @@ TEST_CASE("ptime_fmt")
 
 TEST_CASE("rgb_color from string")
 {
-    const auto name = string_fragment::from_const("SkyBlue1");
+    const auto name = string_fragment::from_const("#87d7ff");
     auto color = from<rgb_color>(name).unwrap();
     CHECK(color.rc_r == 135);
     CHECK(color.rc_g == 215);
@@ -318,5 +354,26 @@ TEST_CASE("data_scanner quote")
         data_parser dp(&ds);
 
         dp.parse();
+    }
+}
+
+TEST_CASE("data_scanner quote3")
+{
+    static const char INPUT[] = "\nC0\n\n\"000\"00";
+
+    {
+        data_scanner ds(string_fragment::from_const(INPUT));
+
+        auto tok_res = ds.tokenize2();
+        CHECK(tok_res->tr_token == DT_LINE);
+        tok_res = ds.tokenize2();
+        CHECK(tok_res->tr_token == DT_SYMBOL);
+        printf(" %d:%d\n", tok_res->tr_capture.c_begin, tok_res->tr_capture.c_end);
+        tok_res = ds.tokenize2();
+        CHECK(tok_res->tr_token == DT_LINE);
+        tok_res = ds.tokenize2();
+        CHECK(tok_res->tr_token == DT_LINE);
+        tok_res = ds.tokenize2();
+        CHECK(tok_res->tr_token == DT_QUOTED_STRING);
     }
 }

@@ -49,7 +49,7 @@ using namespace lnav::roles::literals;
 
 const unsigned char db_label_source::NULL_STR[] = "<NULL>";
 
-constexpr size_t MAX_JSON_WIDTH = 16 * 1024;
+constexpr ssize_t MAX_JSON_WIDTH = 16 * 1024;
 
 struct user_row_style {
     std::map<std::string, style_config> urs_column_config;
@@ -92,7 +92,7 @@ db_label_source::text_value_for_line(textview_curses& tc,
     }
     std::optional<log_level_t> row_level;
     auto cell_cursor = this->dls_row_cursors[row].sync();
-    for (int lpc = 0; lpc < (int) this->dls_headers.size();
+    for (size_t lpc = 0; lpc < this->dls_headers.size();
          lpc++, cell_cursor = cell_cursor->next())
     {
         if (lpc == this->dls_row_style_column
@@ -104,11 +104,11 @@ db_label_source::text_value_for_line(textview_curses& tc,
         if (hm.hm_hidden) {
             continue;
         }
-        auto actual_col_size
+        ssize_t actual_col_size
             = std::min(this->dls_max_column_width, hm.hm_column_size);
         auto align = hm.hm_align;
 
-        if (row < this->dls_row_styles.size()) {
+        if (row < (int) this->dls_row_styles.size()) {
             auto style_iter
                 = this->dls_row_styles[row].rs_column_config.find(lpc);
             if (style_iter != this->dls_row_styles[row].rs_column_config.end())
@@ -134,6 +134,13 @@ db_label_source::text_value_for_line(textview_curses& tc,
         }
 
         auto cell_length = al.utf8_length_or_length();
+        if (actual_col_size < cell_length) {
+            log_warning(
+                "invalid column size: actual_col_size=%d < cell_length=%d",
+                actual_col_size,
+                cell_length);
+            cell_length = actual_col_size;
+        }
         const auto padding = actual_col_size - cell_length;
         auto lpadding = 0;
         auto rpadding = padding;
@@ -236,7 +243,7 @@ db_label_source::text_attrs_for_line(textview_curses& tc,
         if (hm.hm_hidden) {
             continue;
         }
-        if (row < this->dls_row_styles.size()) {
+        if (row < (ssize_t) this->dls_row_styles.size()) {
             auto style_iter
                 = this->dls_row_styles[row].rs_column_config.find(lpc);
             if (style_iter != this->dls_row_styles[row].rs_column_config.end())
@@ -376,7 +383,7 @@ db_label_source::update_time_column(const string_fragment& sf)
     }
     if (!this->dls_time_column.empty() && tv < this->dls_time_column.back()) {
         this->dls_time_column_invalidated_at = this->dls_time_column.size();
-        this->dls_time_column_index = -1;
+        this->dls_time_column_index = SIZE_MAX;
         this->dls_time_column.clear();
     } else {
         this->dls_time_column.push_back(tv);
@@ -444,7 +451,9 @@ db_label_source::push_column(const column_value_t& sv)
             this->dls_cell_container.push_int_cell(i);
         },
         [this, &width](double d) {
-            width = count_digits(d);
+            char buffer[1];
+            auto fmt_res = fmt::format_to_n(buffer, 0, FMT_STRING("{}"), d);
+            width = fmt_res.size;
             this->dls_cell_container.push_float_cell(d);
         },
         [this, &width](null_value_t) {
@@ -630,11 +639,11 @@ db_label_source::clear()
     this->dls_row_cursors.clear();
     this->dls_cell_container.reset();
     this->dls_time_column.clear();
-    this->dls_time_column_index = -1;
+    this->dls_time_column_index = SIZE_MAX;
     this->dls_cell_width.clear();
     this->dls_row_styles.clear();
     this->dls_row_styles_have_errors = false;
-    this->dls_row_style_column = -1;
+    this->dls_row_style_column = SIZE_MAX;
     this->dls_level_column = std::nullopt;
     this->dls_cell_allocator.reset();
     if (this->tss_view != nullptr) {
@@ -700,7 +709,7 @@ db_label_source::list_input_handle_key(listview_curses& lv, const ncinput& ch)
                 std::vector<attr_line_t> rows;
                 auto* ov_source = lv.get_overlay_source();
                 ov_source->list_value_for_overlay(lv, lv.get_selection(), rows);
-                if (ov_sel.value() < rows.size()) {
+                if (ov_sel.value() < (ssize_t) rows.size()) {
                     auto& row_al = rows[ov_sel.value()];
                     auto col_attr
                         = get_string_attr(row_al.al_attrs, DBA_COLUMN_NAME);
@@ -742,7 +751,7 @@ db_label_source::text_row_details(const textview_curses& tc)
         std::vector<attr_line_t> rows;
         auto* ov_source = tc.get_overlay_source();
         ov_source->list_value_for_overlay(tc, tc.get_selection(), rows);
-        if (ov_sel.value() < rows.size()) {
+        if (ov_sel.value() < (ssize_t) rows.size()) {
             auto& row_al = rows[ov_sel.value()];
             auto deets_attr = get_string_attr(row_al.al_attrs, DBA_DETAILS);
             if (deets_attr) {
@@ -1143,10 +1152,14 @@ db_overlay_source::list_value_for_overlay(const listview_curses& lv,
                             root.gen(cursor->get_float_as_text());
                         }
                         break;
+                    case lnav::cell_type::CT_TEXT:
+                        root.gen(cursor->get_text());
+                        break;
                 }
             }
 
-            al.append(": ").append(sf);
+            auto value_al = attr_line_t::from_table_cell_content(sf, 1000);
+            al.append(": ").append(value_al);
             al.al_attrs.emplace_back(
                 line_range{0, -1},
                 DBA_DETAILS.value(gen.to_string_fragment().to_string()));

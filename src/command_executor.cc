@@ -86,8 +86,9 @@ sql_progress(const log_cursor& lc)
 
         if (off >= 0 && off <= total) {
             lnav_data.ld_bottom_source.update_loading(off, total);
+            lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
         }
-        lnav_data.ld_status_refresher();
+        lnav_data.ld_status_refresher(lnav::func::op_type::blocking);
     }
 
     return 0;
@@ -107,7 +108,8 @@ sql_progress_finished()
     }
 
     lnav_data.ld_bottom_source.update_loading(0, 0);
-    lnav_data.ld_status_refresher();
+    lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
+    lnav_data.ld_status_refresher(lnav::func::op_type::blocking);
     lnav_data.ld_views[LNV_DB].redo_search();
 }
 
@@ -273,8 +275,6 @@ execute_search(const std::string& search_cmd)
 Result<std::string, lnav::console::user_message>
 execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
 {
-    static auto& prompt = lnav::prompt::get();
-
     auto_mem<sqlite3_stmt> stmt(sqlite3_finalize);
     timeval start_tv, end_tv;
     std::string stmt_str = trim(sql);
@@ -337,6 +337,7 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
     lnav_data.ld_mode = ln_mode_t::BUSY;
     auto mode_fin = finally([old_mode]() { lnav_data.ld_mode = old_mode; });
     lnav_data.ld_bottom_source.grep_error("");
+    lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
 
     if (startswith(stmt_str, ".")) {
         std::vector<std::string> args;
@@ -470,6 +471,7 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
                     log_error("sqlite3_step error code: %d", retcode);
                     auto um = sqlite3_error_to_user_message(lnav_data.ld_db)
                                   .with_context_snippets(ec.ec_source)
+                                  .remove_internal_snippets()
                                   .with_note(bound_note)
                                   .move();
 
@@ -480,8 +482,6 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
 
         curr_stmt = tail;
     }
-
-    prompt.p_editor.tc_inactive_value.clear();
 
     if (last_is_readonly && !ec.ec_label_source_stack.empty()) {
         auto& dls = *ec.ec_label_source_stack.back();
@@ -506,6 +506,7 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
             cached_chunks);
     }
     gettimeofday(&end_tv, nullptr);
+    lnav_data.ld_mode = old_mode;
     if (retcode == SQLITE_DONE) {
         if (lnav_data.ld_log_source.is_line_meta_changed()) {
             lnav_data.ld_log_source.text_filters_changed();
@@ -523,6 +524,7 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
             dls.dls_generation += 1;
             if (!dls.dls_row_cursors.empty()) {
                 lnav_data.ld_views[LNV_DB].reload_data();
+                lnav_data.ld_views[LNV_DB].set_top(0_vl);
                 lnav_data.ld_views[LNV_DB].set_left(0);
                 if (lnav_data.ld_flags & LNF_HEADLESS) {
                     if (ec.ec_local_vars.size() == 1) {
@@ -579,65 +581,14 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
 }
 
 Result<void, lnav::console::user_message>
-multiline_executor::push_back(string_fragment line)
+multiline_executor::handle_command(const std::string& cmdline)
 {
-    this->me_line_number += 1;
-
-    if (line.trim().empty()) {
-        if (this->me_cmdline) {
-            this->me_cmdline = this->me_cmdline.value() + "\n";
-        }
-        return Ok();
-    }
-    if (line[0] == '#') {
-        return Ok();
-    }
-
-    switch (line[0]) {
-        case ':':
-        case '/':
-        case ';':
-        case '|':
-            if (this->me_cmdline) {
-                this->me_last_result
-                    = TRY(execute_from_file(this->me_exec_context,
-                                            this->me_source,
-                                            this->me_starting_line_number,
-                                            trim(this->me_cmdline.value())));
-            }
-
-            this->me_starting_line_number = this->me_line_number;
-            this->me_cmdline = line.to_string();
-            break;
-        default:
-            if (this->me_cmdline) {
-                this->me_cmdline = fmt::format(
-                    FMT_STRING("{}{}"), this->me_cmdline.value(), line);
-            } else {
-                this->me_last_result = TRY(
-                    execute_from_file(this->me_exec_context,
-                                      this->me_source,
-                                      this->me_line_number,
-                                      fmt::format(FMT_STRING(":{}"), line)));
-            }
-            break;
-    }
+    this->me_last_result = TRY(execute_from_file(this->me_exec_context,
+                                                 this->p_source,
+                                                 this->p_starting_line_number,
+                                                 cmdline));
 
     return Ok();
-}
-
-Result<std::string, lnav::console::user_message>
-multiline_executor::final()
-{
-    if (this->me_cmdline) {
-        this->me_last_result
-            = TRY(execute_from_file(this->me_exec_context,
-                                    this->me_source,
-                                    this->me_starting_line_number,
-                                    trim(this->me_cmdline.value())));
-    }
-
-    return Ok(this->me_last_result);
 }
 
 static Result<std::string, lnav::console::user_message>
@@ -671,7 +622,8 @@ execute_file_contents(exec_context& ec, const std::filesystem::path& path)
         TRY(me.push_back(string_fragment::from_bytes(line.in(), line_size)));
     }
 
-    auto retval = TRY(me.final());
+    TRY(me.final());
+    auto retval = std::move(me.me_last_result);
 
     if (file == stdin) {
         if (isatty(STDOUT_FILENO)) {
@@ -690,7 +642,6 @@ execute_file(exec_context& ec, const std::string& path_and_args)
 {
     static const intern_string_t SRC = intern_string::lookup("cmdline");
 
-    available_scripts scripts;
     std::string retval, msg;
     shlex lexer(path_and_args);
 
@@ -701,9 +652,9 @@ execute_file(exec_context& ec, const std::string& path_and_args)
         auto split_err = split_args_res.unwrapErr();
         auto um = lnav::console::user_message::error(
                       "unable to parse script command-line")
-                      .with_reason(split_err.te_msg)
+                      .with_reason(split_err.se_error.te_msg)
                       .with_snippet(lnav::console::snippet::from(
-                          SRC, lexer.to_attr_line(split_err)))
+                          SRC, lexer.to_attr_line(split_err.se_error)))
                       .move();
 
         return Err(um);
@@ -713,7 +664,7 @@ execute_file(exec_context& ec, const std::string& path_and_args)
         return ec.make_error("no script specified");
     }
 
-    ec.ec_local_vars.push({});
+    ec.ec_local_vars.emplace();
 
     auto script_name = split_args[0].se_value;
     auto& vars = ec.ec_local_vars.top();
@@ -735,7 +686,7 @@ execute_file(exec_context& ec, const std::string& path_and_args)
 
     std::vector<script_metadata> paths_to_exec;
 
-    find_format_scripts(lnav_data.ld_config_paths, scripts);
+    auto scripts = find_format_scripts(lnav_data.ld_config_paths);
     auto iter = scripts.as_scripts.find(script_name);
     if (iter != scripts.as_scripts.end()) {
         paths_to_exec = iter->second;
@@ -836,6 +787,8 @@ execute_from_file(exec_context& ec,
     auto _sg
         = ec.enter_source(intern_string::lookup(src), line_number, cmdline);
 
+    lnav_data.ld_view_stack.top() |
+        [&ec](auto* tc) { ec.ec_top_line = tc->get_selection(); };
     switch (cmdline[0]) {
         case ':':
             retval = TRY(execute_command(ec, cmdline.substr(1)));
@@ -1219,8 +1172,8 @@ pipe_callback(exec_context& ec, const std::string& cmdline, auto_fd& fd)
         .with_include_in_session(false)
         .with_detect_format(false)
         .with_init_location(0_vl);
-    lnav_data.ld_files_to_front.emplace_back(desc, 0_vl);
-    prompt.p_editor.tc_alt_value = HELP_MSG_1(X, "to close the file");
+    lnav_data.ld_files_to_front.emplace_back(desc);
+    prompt.p_editor.set_alt_value(HELP_MSG_1(X, "to close the file"));
 
     return lnav::futures::make_ready_future(std::string());
 }
@@ -1283,12 +1236,18 @@ exec_context::exec_context(logline_value_vector* line_values,
 }
 
 Result<std::string, lnav::console::user_message>
-exec_context::execute(const std::string& cmdline)
+exec_context::execute(source_location loc, const std::string& cmdline)
 {
     static auto& prompt = lnav::prompt::get();
-    lnav::textinput::history::op_guard hist_guard;
 
-    if (this->get_provenance<mouse_input>() && !prompt.p_editor.vc_enabled) {
+    lnav::textinput::history::op_guard hist_guard;
+    auto sg = this->enter_source(loc, cmdline);
+
+    std::optional<uint32_t> before_dls_gen;
+    if (!this->ec_label_source_stack.empty()) {
+        before_dls_gen = this->ec_label_source_stack.back()->dls_generation;
+    }
+    if (this->get_provenance<mouse_input>() && !prompt.p_editor.is_enabled()) {
         auto& hist = prompt.get_history_for(cmdline[0]);
         hist_guard = hist.start_operation(cmdline.substr(1));
     }
@@ -1298,6 +1257,13 @@ exec_context::execute(const std::string& cmdline)
         hist_guard.og_status = log_level_t::LEVEL_ERROR;
         if (!this->ec_msg_callback_stack.empty()) {
             this->ec_msg_callback_stack.back()(exec_res.unwrapErr());
+        }
+    } else if (before_dls_gen) {
+        const auto& dls = this->ec_label_source_stack.back();
+        if (before_dls_gen.value() != dls->dls_generation
+            && dls->dls_row_cursors.size() > 1)
+        {
+            ensure_view(LNV_DB);
         }
     }
 
@@ -1318,6 +1284,7 @@ exec_context::add_error_context(lnav::console::user_message& um)
 
     if (um.um_snippets.empty()) {
         um.with_snippets(this->ec_source);
+        um.remove_internal_snippets();
     }
 
     if (this->ec_current_help != nullptr && um.um_help.empty()) {
@@ -1336,16 +1303,14 @@ exec_context::push_callback(sql_callback_t cb)
 {
     return sql_callback_guard(*this, cb);
 }
+
 exec_context::source_guard
-exec_context::enter_source(intern_string_t path,
-                           int line_number,
-                           const std::string& content)
+exec_context::enter_source(source_location loc, const std::string& content)
 {
     attr_line_t content_al{content};
     content_al.with_attr_for_all(VC_ROLE.value(role_t::VCR_QUOTED_CODE));
     readline_lnav_highlighter(content_al, -1);
-    this->ec_source.emplace_back(
-        lnav::console::snippet::from(path, content_al).with_line(line_number));
+    this->ec_source.emplace_back(lnav::console::snippet::from(loc, content_al));
     return {this};
 }
 

@@ -45,9 +45,9 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
 #   define YYCTYPE unsigned char
 #   define CAPTURE(tok) { \
         if (YYCURSOR.val == EMPTY) { \
-            this->ds_next_offset = this->ds_input.length(); \
+            this->ds_next_offset = this->ds_input.sf_end; \
         } else { \
-            this->ds_next_offset = YYCURSOR.val - this->ds_input.udata(); \
+            this->ds_next_offset = YYCURSOR.val - (const unsigned char*) this->ds_input.sf_string; \
         } \
         cap_all.c_end = this->ds_next_offset; \
         cap_inner.c_end = this->ds_next_offset; \
@@ -56,7 +56,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
 
 #   define RET(tok) { \
         CAPTURE(tok); \
-        return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()}; \
+        return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string}; \
     }
     static const unsigned char *EMPTY = (const unsigned char *) "";
 
@@ -97,7 +97,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
         const YYCTYPE *val{nullptr};
         const YYCTYPE *lim{nullptr};
     } YYCURSOR;
-    YYCURSOR = (const unsigned char *) this->ds_input.udata() + this->ds_next_offset;
+    YYCURSOR = (const unsigned char *) this->ds_input.sf_string + this->ds_next_offset;
     _YYCURSOR yyt1;
     _YYCURSOR yyt2;
     _YYCURSOR yyt3;
@@ -152,7 +152,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
        EOF = "";
        SYN = "\x16";
        IPV4SEG  = ("25"[0-5]|("2"[0-4]|"1"{0,1}[0-9]){0,1}[0-9]);
-       IPV4ADDR = (IPV4SEG"."){3,3}IPV4SEG;
+       IPV4ADDR = (IPV4SEG("."|"\\.")){3,3}IPV4SEG;
        IPV6SEG  = [0-9a-fA-F]{1,4};
        IPV6ADDR = (
                   (IPV6SEG":"){7,7}IPV6SEG|
@@ -179,7 +179,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
 
        <init, bol> ("f"|"u"|"r")?'"'('\\'[^\x00]|[^\x00\x16\x1b\n"\\]|'""')*'"' {
            CAPTURE(DT_QUOTED_STRING);
-           switch (this->ds_input[cap_inner.c_begin]) {
+           switch (this->ds_input.sf_string[cap_inner.c_begin]) {
            case 'f':
            case 'u':
            case 'r':
@@ -188,11 +188,24 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
            }
            cap_inner.c_begin += 1;
            cap_inner.c_end -= 1;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
+       }
+       <init, bol> ("f"|"u"|"r")?'"'('\\''"'|[^\x00\x16\x1b\n"\\]|'""')*[\x00] {
+           CAPTURE(DT_QUOTED_STRING);
+           switch (this->ds_input.sf_string[cap_inner.c_begin]) {
+           case 'f':
+           case 'u':
+           case 'r':
+               cap_inner.c_begin += 1;
+               break;
+           }
+           cap_inner.c_begin += 1;
+           cap_inner.c_end -= 1;
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
        <init, bol> ("f"|"u"|"r")?'"""' {
            CAPTURE(DT_QUOTED_STRING);
-           switch (this->ds_input[cap_inner.c_begin]) {
+           switch (this->ds_input.sf_string[cap_inner.c_begin]) {
            case 'f':
            case 'u':
            case 'r':
@@ -206,12 +219,12 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
        <dbldocstring> '"""' {
            CAPTURE(DT_QUOTED_STRING);
            cap_inner.c_end -= 3;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <dbldocstring> [\x00] {
            CAPTURE(DT_QUOTED_STRING);
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <dbldocstring> * {
@@ -220,7 +233,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
 
        <init, bol> ("f"|"u"|"r")?"'''" {
            CAPTURE(DT_QUOTED_STRING);
-           switch (this->ds_input[cap_inner.c_begin]) {
+           switch (this->ds_input.sf_string[cap_inner.c_begin]) {
            case 'f':
            case 'u':
            case 'r':
@@ -234,13 +247,13 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
        <sdocstring> [\x00] {
            CAPTURE(DT_QUOTED_STRING);
            cap_inner.c_end -= 1;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <sdocstring> "'''" {
            CAPTURE(DT_QUOTED_STRING);
            cap_inner.c_end -= 3;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <sdocstring> * {
@@ -256,13 +269,13 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
        <rdocstring> [\x00] {
            CAPTURE(DT_QUOTED_STRING);
            cap_inner.c_end -= 1;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <rdocstring> ")\"" {
            CAPTURE(DT_QUOTED_STRING);
            cap_inner.c_end -= 2;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <rdocstring> * {
@@ -275,16 +288,28 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
            goto yyc_codeblock;
        }
 
+       <init, bol> "~~~" {
+           CAPTURE(DT_CODE_BLOCK);
+           cap_inner.c_begin += 3;
+           goto yyc_codeblock;
+       }
+
        <codeblock> [\x00] {
            CAPTURE(DT_CODE_BLOCK);
            cap_inner.c_end -= 1;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <codeblock> "```" {
            CAPTURE(DT_CODE_BLOCK);
            cap_inner.c_end -= 3;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
+       }
+
+       <codeblock> "~~~" {
+           CAPTURE(DT_CODE_BLOCK);
+           cap_inner.c_end -= 3;
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <codeblock> * {
@@ -300,7 +325,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
                cap_inner.c_end = split_res.first.sf_end;
                this->ds_next_offset = cap_all.c_end;
            }
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
        <init, bol> "<!--" ([^\x00*]|"-"+[^\x00>])* "-"{2,} ">" {
            CAPTURE(DT_COMMENT);
@@ -311,7 +336,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
                cap_inner.c_end = split_res.first.sf_end;
                this->ds_next_offset = cap_all.c_end;
            }
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
        <init, bol> "#[" "="* "[" ([^\x00\]]|"]" [^\x00=\]])* "]" "="* "]" {
            CAPTURE(DT_COMMENT);
@@ -322,36 +347,63 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
                cap_inner.c_end = split_res.first.sf_end;
                this->ds_next_offset = cap_all.c_end;
            }
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
-       <init, bol> ("f"|"u"|"r")?"'"('\\'[^\x00]|"''"|[^\x00\x16\x1b\n'\\])*"'"/[^sS] {
+       <init, bol> ("f"|"u"|"r"|"x"|"X")?"'"('\\'[^\x00]|"''"|[^\x00\x16\x1b\n'\\])*"'"/[^sS] {
            CAPTURE(DT_QUOTED_STRING);
            if (tf == text_format_t::TF_RUST) {
                auto sf = this->to_string_fragment(cap_all);
                auto split_res = sf.split_when([](char ch) { return ch != '\'' && !isalnum(ch); });
-               cap_all.c_end = split_res.first.sf_end - this->ds_input.sf_begin;
-               cap_inner.c_end = split_res.first.sf_end - this->ds_input.sf_begin;
+               cap_all.c_end = split_res.first.sf_end;
+               cap_inner.c_end = split_res.first.sf_end;
                this->ds_next_offset = cap_all.c_end;
-               return tokenize_result{DT_SYMBOL, cap_all, cap_inner, this->ds_input.data()};
+               return tokenize_result{DT_SYMBOL, cap_all, cap_inner, this->ds_input.sf_string};
            }
-           switch (this->ds_input[cap_inner.c_begin]) {
+           switch (this->ds_input.sf_string[cap_inner.c_begin]) {
            case 'f':
            case 'u':
            case 'r':
+           case 'x':
+           case 'X':
                cap_inner.c_begin += 1;
                break;
            }
            cap_inner.c_begin += 1;
            cap_inner.c_end -= 1;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
+       }
+       <init, bol> ("f"|"u"|"r")?"'"('\\'"'"|[^\x00\x16\x1b\n'\\]|"''")*[\x00] {
+           CAPTURE(DT_QUOTED_STRING);
+           if (tf == text_format_t::TF_RUST) {
+               auto sf = this->to_string_fragment(cap_all);
+               auto split_res = sf.split_when([](char ch) { return ch != '\'' && !isalnum(ch); });
+               cap_all.c_end = split_res.first.sf_end;
+               cap_inner.c_end = split_res.first.sf_end;
+               this->ds_next_offset = cap_all.c_end;
+               return tokenize_result{DT_SYMBOL, cap_all, cap_inner, this->ds_input.sf_string};
+           }
+           switch (this->ds_input.sf_string[cap_inner.c_begin]) {
+           case 'f':
+           case 'u':
+           case 'r':
+           case 'x':
+           case 'X':
+               cap_inner.c_begin += 1;
+               break;
+           }
+           cap_inner.c_begin += 1;
+           cap_inner.c_end -= 1;
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
        <init, bol> [a-zA-Z0-9]+":/""/"?[^\x00\x16\x1b\r\n\t '"[\](){}]+[/a-zA-Z0-9\-=&?%] { RET(DT_URL); }
-       <init, bol> ("/"|"./"|"../"|[A-Z]":\\"|"\\\\")("Program Files"(" (x86)")?)?[a-zA-Z0-9_\.\-\~/\\!@#$%^&*()]* { RET(DT_PATH); }
+       <init, bol> "$"("!"|"?"|"#"|[a-zA-Z0-9_]+) / [^/] { RET(DT_ID); }
+       <init, bol> "${"("!"|"?"|"#"|[a-zA-Z0-9_]+)"}" { RET(DT_ID); }
+       <init, bol> ("$"[a-zA-Z0-9_]+)?("/"|"./"|"../"|[A-Z]":\\"|"\\\\")("Program Files"(" (x86)")?)?[a-zA-Z0-9_\.\-\~/\\!@#$%^&*()]* { RET(DT_PATH); }
        <init, bol> (SPACE|NUM)NUM":"NUM{2}/[^:] { RET(DT_TIME); }
        <init, bol> (SPACE|NUM)NUM?":"NUM{2}":"NUM{2}("."NUM{3,6})?/[^:] { RET(DT_TIME); }
        <init, bol> [0-9a-fA-F][0-9a-fA-F]((":"|"-")[0-9a-fA-F][0-9a-fA-F])+ {
-           if ((YYCURSOR.val - (this->ds_input.udata() + this->ds_next_offset)) == 17) {
+           if ((YYCURSOR.val - ((const unsigned char*) this->ds_input.sf_string + this->ds_next_offset)) == 17) {
                RET(DT_MAC_ADDRESS);
            } else {
                RET(DT_HEX_DUMP);
@@ -367,6 +419,8 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
            RET(DT_DATE);
        }
        <init, bol> IPV6ADDR/(": "|[^:a-zA-Z0-9]) { RET(DT_IPV6_ADDRESS); }
+
+       <init, bol> "#" ([a-zA-Z0-9_\-]+|("/"[a-zA-Z0-9_\-]+)+) { RET(DT_ANCHOR); }
 
        <init, bol> "<!"[a-zA-Z0-9_:\-]+SPACE*([a-zA-Z0-9_:\-]+(SPACE*'='SPACE*('"'(('\\'[^\x00]|[^\x00"\\])+)'"'|"'"(('\\'[^\x00]|[^\x00'\\])+)"'"|[^\x00>]+))?|SPACE*('"'(('\\'[^\x00]|[^\x00"\\])+)'"'|"'"(('\\'[^\x00]|[^\x00'\\])+)"'"))*SPACE*">" {
            RET(DT_XML_DECL_TAG);
@@ -386,46 +440,54 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
 
        <bol> [A-Z][A-Z _\-0-9]+"\n" {
            CAPTURE(DT_H1);
+           if (tf != text_format_t::TF_MAN) {
+               auto sf = this->to_string_fragment(cap_all);
+               auto split_res = sf.split_when(isspace);
+               cap_all.c_end = split_res.first.sf_end;
+               cap_inner.c_end = split_res.first.sf_end;
+               this->ds_next_offset = cap_all.c_end;
+               return tokenize_result{DT_SYMBOL, cap_all, cap_inner, this->ds_input.sf_string};
+           }
            cap_inner.c_end -= 1;
            this->ds_bol = true;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <bol> "["[^\x00\n]+"]\n" {
            CAPTURE(DT_H1);
            cap_inner.c_end -= 1;
            this->ds_bol = true;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <bol> "diff --git "[^\x00\n]+"\n" {
            CAPTURE(DT_H1);
            cap_inner.c_end = cap_inner.c_begin;
            this->ds_bol = true;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <bol> "CREATE TABLE" " IF NOT EXISTS"? [ \t]+ @table_start [a-zA-Z_][_a-zA-Z0-9]+ @table_end [^\x00\n]* "\n" {
            CAPTURE(DT_H1);
-           cap_inner.c_begin = table_start.val - this->ds_input.udata();
-           cap_inner.c_end = table_end.val - this->ds_input.udata();
+           cap_inner.c_begin = table_start.val - (const unsigned char*) this->ds_input.sf_string;
+           cap_inner.c_end = table_end.val - (const unsigned char*) this->ds_input.sf_string;
            this->ds_bol = true;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <bol> "--- "[^\x00\n]+"\n+++ "[^\x00\n]+"\n" {
            CAPTURE(DT_DIFF_FILE_HEADER);
            cap_inner.c_end -= 1;
            this->ds_bol = true;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <init, bol> "@@ -"[0-9]+","[0-9]+" +"[0-9]+","[0-9]+" @@ " @hunk_heading ([^\x00\n]+)"\n" {
            CAPTURE(DT_DIFF_HUNK_HEADING);
-           cap_inner.c_begin = hunk_heading.val - this->ds_input.udata();
+           cap_inner.c_begin = hunk_heading.val - (const unsigned char*) this->ds_input.sf_string;
            cap_inner.c_end -= 1;
            this->ds_bol = true;
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <init, bol> ESC"["[0-9=;?]*[a-zA-Z] {
@@ -440,7 +502,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
        <emdashcomment> [\x00\n] {
            CAPTURE(DT_COMMENT);
 
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <emdashcomment> * {
@@ -481,7 +543,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
                this->ds_next_offset = cap_all.c_end;
                token_out = DT_HEX_DUMP;
            }
-           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{token_out, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <init, bol> ("-"|"+")?[0-9]"."[0-9]+([eE][\-\+][0-9]+)?UNITS? {
@@ -491,12 +553,12 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
                while (isalpha(sf.back())) {
                    sf.pop_back();
                }
-               cap_all.c_end = sf.sf_end - this->ds_input.sf_begin;
-               cap_inner.c_end = sf.sf_end - this->ds_input.sf_begin;
+               cap_all.c_end = sf.sf_end;
+               cap_inner.c_end = sf.sf_end;
                this->ds_next_offset = cap_all.c_end;
                this->ds_units = true;
            }
-           return tokenize_result{DT_NUMBER, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{DT_NUMBER, cap_all, cap_inner, this->ds_input.sf_string};
        }
 
        <init, bol> [0-9]+("."[0-9]+[a-zA-Z0-9_]*){2,}("-"[a-zA-Z0-9_]+)?|[0-9]+("."[0-9]+[a-zA-Z0-9_]*)+"-"[a-zA-Z0-9_]+ {
@@ -516,12 +578,12 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
                while (isalpha(sf.back())) {
                    sf.pop_back();
                }
-               cap_all.c_end = sf.sf_end - this->ds_input.sf_begin;
-               cap_inner.c_end = sf.sf_end - this->ds_input.sf_begin;
+               cap_all.c_end = sf.sf_end;
+               cap_inner.c_end = sf.sf_end;
                this->ds_next_offset = cap_all.c_end;
                this->ds_units = true;
            }
-           return tokenize_result{DT_NUMBER, cap_all, cap_inner, this->ds_input.data()};
+           return tokenize_result{DT_NUMBER, cap_all, cap_inner, this->ds_input.sf_string};
        }
        <init, bol> "-"?("0x"|[0-9])[0-9a-fA-F]+ { RET(DT_HEX_NUMBER); }
 
@@ -541,11 +603,11 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
            RET(DT_SYMBOL);
        }
 
-       <init, bol> [a-zA-Z_][a-zA-Z0-9_]*(("::"|".")[a-zA-Z_0-9\-]+)* {
+       <init, bol> [a-zA-Z_][a-zA-Z0-9_]*(("::"|"."|"\\.")[a-zA-Z_0-9\-]+)* {
            RET(DT_SYMBOL);
        }
 
-       <init, bol> [a-zA-Z0-9_]+(("::"|"."|"-"|"@"|"/")[a-zA-Z0-9_]+)* {
+       <init, bol> [a-zA-Z0-9_]+(("::"|"."|"\\."|"-"|"@"|"/"|"$")[a-zA-Z0-9_]+)* {
            RET(DT_ID);
        }
 
@@ -555,6 +617,7 @@ std::optional<data_scanner::tokenize_result> data_scanner::tokenize_int(text_for
        }
        <init, bol> SPACE+ { RET(DT_WHITE); }
        <init, bol> "." { RET(DT_DOT); }
+       <init, bol> "\\" / [\x00] { RET(DT_GARBAGE); }
        <init, bol> "\\". { RET(DT_ESCAPED_CHAR); }
        <init, bol> . { RET(DT_GARBAGE); }
 

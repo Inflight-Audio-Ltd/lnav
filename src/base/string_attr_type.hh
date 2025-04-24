@@ -37,11 +37,13 @@
 
 #include <stdint.h>
 
+#include "base/file_range.hh"
 #include "base/intern_string.hh"
 #include "base/string_util.hh"
 #include "color_spaces.hh"
 #include "enum_util.hh"
 #include "mapbox/variant.hpp"
+#include "text_format_enum.hh"
 
 class logfile;
 struct bookmark_metadata;
@@ -52,7 +54,22 @@ enum class ui_icon_t : int32_t {
     info,
     warning,
     error,
+
+    log_level_trace,
+    log_level_debug,
+    log_level_info,
+    log_level_stats,
+    log_level_notice,
+    log_level_warning,
+    log_level_error,
+    log_level_critical,
+    log_level_fatal,
+
+    play,
+    edit,
 };
+
+constexpr auto ui_icon_count = lnav::enums::to_underlying(ui_icon_t::edit) + 1;
 
 /** Roles that can be mapped to curses attributes using attrs_for_role() */
 enum class role_t : int32_t {
@@ -72,6 +89,8 @@ enum class role_t : int32_t {
     VCR_ADJUSTED_TIME,
     VCR_SKEWED_TIME,
     VCR_OFFSET_TIME,
+    VCR_TIME_COLUMN,
+    VCR_TIME_COLUMN_TO_TEXT,
     VCR_FILE_OFFSET,
     VCR_INVALID_MSG,
     VCR_STATUS, /*< Normal status line text. */
@@ -151,6 +170,7 @@ enum class role_t : int32_t {
     VCR_SEP_REF_ACC,
     VCR_SUGGESTION,
     VCR_SELECTED_TEXT,
+    VCR_FUZZY_MATCH,
 
     VCR__MAX
 };
@@ -283,8 +303,8 @@ struct text_attrs {
     }
 
     uint32_t ta_attrs{0};
-    styling::color_unit ta_fg_color{styling::color_unit::make_empty()};
-    styling::color_unit ta_bg_color{styling::color_unit::make_empty()};
+    styling::color_unit ta_fg_color{styling::color_unit::EMPTY};
+    styling::color_unit ta_bg_color{styling::color_unit::EMPTY};
     std::optional<text_align_t> ta_align;
 };
 
@@ -295,6 +315,17 @@ struct block_elem_t {
     bool operator==(const block_elem_t& rhs) const
     {
         return this->value == rhs.value && this->role == rhs.role;
+    }
+};
+
+struct ui_command {
+    source_location uc_location;
+    std::string uc_command;
+
+    bool operator==(const ui_command& rhs) const
+    {
+        return this->uc_location == rhs.uc_location
+            && this->uc_command == rhs.uc_command;
     }
 };
 
@@ -309,7 +340,9 @@ using string_attr_value = mapbox::util::variant<int64_t,
                                                 block_elem_t,
                                                 styling::color_unit,
                                                 ui_icon_t,
-                                                const char*>;
+                                                const char*,
+                                                ui_command,
+                                                text_format_t>;
 
 class string_attr_type_base {
 public:
@@ -349,7 +382,10 @@ public:
     }
 
     template<typename U = T>
-    std::enable_if_t<!std::is_void_v<U>, string_attr_pair> value(U&& val) const
+    constexpr std::enable_if_t<!std::is_void_v<U>
+                                   && std::is_convertible_v<U, T>,
+                               string_attr_pair>
+    value(U&& val) const
     {
         if constexpr (std::is_same_v<const char*, U>
                       && std::is_same_v<std::string, T>)
@@ -362,7 +398,8 @@ public:
 
 extern const string_attr_type<void> SA_ORIGINAL_LINE;
 extern const string_attr_type<void> SA_BODY;
-extern const string_attr_type<void> SA_HIDDEN;
+extern const string_attr_type<ui_icon_t> SA_HIDDEN;
+extern const string_attr_type<void> SA_REPLACED;
 extern const string_attr_type<intern_string_t> SA_FORMAT;
 extern const string_attr_type<void> SA_REMOVED;
 extern const string_attr_type<void> SA_PREFORMATTED;
@@ -370,6 +407,7 @@ extern const string_attr_type<std::string> SA_INVALID;
 extern const string_attr_type<std::string> SA_ERROR;
 extern const string_attr_type<int64_t> SA_LEVEL;
 extern const string_attr_type<int64_t> SA_ORIGIN_OFFSET;
+extern const string_attr_type<text_format_t> SA_QUOTED_TEXT;
 
 extern const string_attr_type<role_t> VC_ROLE;
 extern const string_attr_type<role_t> VC_ROLE_FG;
@@ -380,6 +418,7 @@ extern const string_attr_type<styling::color_unit> VC_FOREGROUND;
 extern const string_attr_type<styling::color_unit> VC_BACKGROUND;
 extern const string_attr_type<std::string> VC_HYPERLINK;
 extern const string_attr_type<ui_icon_t> VC_ICON;
+extern const string_attr_type<ui_command> VC_COMMAND;
 
 namespace lnav {
 
@@ -402,6 +441,15 @@ href(S str, std::string href)
 }  // namespace string::attrs
 
 namespace roles {
+
+template<typename S>
+std::pair<S, string_attr_pair>
+for_flag(S str, bool flag)
+{
+    return std::make_pair(
+        std::move(str),
+        VC_ROLE.value(flag ? role_t::VCR_OK : role_t::VCR_ERROR));
+}
 
 template<typename S>
 std::pair<S, string_attr_pair>
@@ -673,200 +721,199 @@ suggestion(S str)
 
 namespace literals {
 
-inline std::pair<std::string, string_attr_pair> operator"" _ok(const char* str,
+constexpr std::pair<string_fragment, role_t> operator"" _ok(const char* str,
+                                                            std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len}, role_t::VCR_OK);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _error(const char* str,
                                                                std::size_t len)
 {
-    return std::make_pair(std::string(str, len), VC_ROLE.value(role_t::VCR_OK));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_ERROR);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _error(
+constexpr std::pair<string_fragment, role_t> operator"" _warning(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_ERROR));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_WARNING);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _warning(
+constexpr std::pair<string_fragment, role_t> operator"" _info(const char* str,
+                                                              std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len}, role_t::VCR_INFO);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _status_title(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_WARNING));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_STATUS_TITLE);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _info(
+constexpr std::pair<string_fragment, role_t> operator"" _status_subtitle(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_INFO));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_STATUS_SUBTITLE);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _status_title(
+constexpr std::pair<string_fragment, role_t> operator"" _symbol(const char* str,
+                                                                std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_SYMBOL);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _keyword(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_STATUS_TITLE));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_KEYWORD);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _status_subtitle(
+constexpr std::pair<string_fragment, role_t> operator"" _variable(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_STATUS_SUBTITLE));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_VARIABLE);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _symbol(
+constexpr std::pair<string_fragment, role_t> operator"" _comment(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_SYMBOL));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_COMMENT);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _keyword(
+constexpr std::pair<string_fragment, role_t> operator"" _hotkey(const char* str,
+                                                                std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_STATUS_HOTKEY);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _h1(const char* str,
+                                                            std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len}, role_t::VCR_H1);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _h2(const char* str,
+                                                            std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len}, role_t::VCR_H2);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _h3(const char* str,
+                                                            std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len}, role_t::VCR_H3);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _h4(const char* str,
+                                                            std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len}, role_t::VCR_H4);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _h5(const char* str,
+                                                            std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len}, role_t::VCR_H5);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _hr(const char* str,
+                                                            std::size_t len)
+{
+    return std::make_pair(string_fragment{str, 0, (int) len}, role_t::VCR_HR);
+}
+
+constexpr std::pair<string_fragment, role_t> operator"" _hyperlink(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_KEYWORD));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_HYPERLINK);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _variable(
+constexpr std::pair<string_fragment, role_t> operator"" _list_glyph(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_VARIABLE));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_LIST_GLYPH);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _comment(
+constexpr std::pair<string_fragment, role_t> operator"" _breadcrumb(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_COMMENT));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_BREADCRUMB);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _hotkey(
+constexpr std::pair<string_fragment, role_t> operator"" _quoted_code(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_STATUS_HOTKEY));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_QUOTED_CODE);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _h1(const char* str,
-                                                               std::size_t len)
-{
-    return std::make_pair(std::string(str, len), VC_ROLE.value(role_t::VCR_H1));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _h2(const char* str,
-                                                               std::size_t len)
-{
-    return std::make_pair(std::string(str, len), VC_ROLE.value(role_t::VCR_H2));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _h3(const char* str,
-                                                               std::size_t len)
-{
-    return std::make_pair(std::string(str, len), VC_ROLE.value(role_t::VCR_H3));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _h4(const char* str,
-                                                               std::size_t len)
-{
-    return std::make_pair(std::string(str, len), VC_ROLE.value(role_t::VCR_H4));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _h5(const char* str,
-                                                               std::size_t len)
-{
-    return std::make_pair(std::string(str, len), VC_ROLE.value(role_t::VCR_H5));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _hr(const char* str,
-                                                               std::size_t len)
-{
-    return std::make_pair(std::string(str, len), VC_ROLE.value(role_t::VCR_HR));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _hyperlink(
+constexpr std::pair<string_fragment, role_t> operator"" _code_border(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_HYPERLINK));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_CODE_BORDER);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _list_glyph(
+constexpr std::pair<string_fragment, role_t> operator"" _table_header(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_LIST_GLYPH));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_TABLE_HEADER);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _breadcrumb(
+constexpr std::pair<string_fragment, role_t> operator"" _table_border(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_BREADCRUMB));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_TABLE_BORDER);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _quoted_code(
+constexpr std::pair<string_fragment, role_t> operator"" _quote_border(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_QUOTED_CODE));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_QUOTE_BORDER);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _code_border(
+constexpr std::pair<string_fragment, role_t> operator"" _quoted_text(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_CODE_BORDER));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_QUOTED_TEXT);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _table_header(
+constexpr std::pair<string_fragment, role_t> operator"" _footnote_border(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_TABLE_HEADER));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_FOOTNOTE_BORDER);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _table_border(
+constexpr std::pair<string_fragment, role_t> operator"" _footnote_text(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_TABLE_BORDER));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_FOOTNOTE_BORDER);
 }
 
-inline std::pair<std::string, string_attr_pair> operator"" _quote_border(
+constexpr std::pair<string_fragment, role_t> operator"" _snippet_border(
     const char* str, std::size_t len)
 {
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_QUOTE_BORDER));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _quoted_text(
-    const char* str, std::size_t len)
-{
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_QUOTED_TEXT));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _footnote_border(
-    const char* str, std::size_t len)
-{
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_FOOTNOTE_BORDER));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _footnote_text(
-    const char* str, std::size_t len)
-{
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_FOOTNOTE_BORDER));
-}
-
-inline std::pair<std::string, string_attr_pair> operator"" _snippet_border(
-    const char* str, std::size_t len)
-{
-    return std::make_pair(std::string(str, len),
-                          VC_ROLE.value(role_t::VCR_SNIPPET_BORDER));
+    return std::make_pair(string_fragment{str, 0, (int) len},
+                          role_t::VCR_SNIPPET_BORDER);
 }
 
 inline std::pair<std::string, string_attr_pair> operator"" _link(

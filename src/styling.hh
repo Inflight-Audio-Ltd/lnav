@@ -40,7 +40,6 @@
 #include "base/log_level_enum.hh"
 #include "base/string_util.hh"
 #include "yajlpp/yajlpp.hh"
-#include "yajlpp/yajlpp_def.hh"
 
 struct term_color {
     short xc_id;
@@ -86,11 +85,26 @@ struct icon_config {
 
 struct lnav_theme {
     std::map<std::string, scoped_value_t> lt_vars;
+
     positioned_property<icon_config> lt_icon_hidden;
     positioned_property<icon_config> lt_icon_ok;
     positioned_property<icon_config> lt_icon_info;
     positioned_property<icon_config> lt_icon_warning;
     positioned_property<icon_config> lt_icon_error;
+
+    positioned_property<icon_config> lt_icon_log_level_trace;
+    positioned_property<icon_config> lt_icon_log_level_debug;
+    positioned_property<icon_config> lt_icon_log_level_info;
+    positioned_property<icon_config> lt_icon_log_level_stats;
+    positioned_property<icon_config> lt_icon_log_level_notice;
+    positioned_property<icon_config> lt_icon_log_level_warning;
+    positioned_property<icon_config> lt_icon_log_level_error;
+    positioned_property<icon_config> lt_icon_log_level_critical;
+    positioned_property<icon_config> lt_icon_log_level_fatal;
+
+    positioned_property<icon_config> lt_icon_play;
+    positioned_property<icon_config> lt_icon_edit;
+
     positioned_property<style_config> lt_style_identifier;
     positioned_property<style_config> lt_style_text;
     positioned_property<style_config> lt_style_alt_text;
@@ -109,6 +123,7 @@ struct lnav_theme {
     positioned_property<style_config> lt_style_adjusted_time;
     positioned_property<style_config> lt_style_skewed_time;
     positioned_property<style_config> lt_style_offset_time;
+    positioned_property<style_config> lt_style_time_column;
     positioned_property<style_config> lt_style_file_offset;
     positioned_property<style_config> lt_style_invalid_msg;
     positioned_property<style_config> lt_style_status_title;
@@ -135,6 +150,7 @@ struct lnav_theme {
     positioned_property<style_config> lt_style_sep_ref_acc;
     positioned_property<style_config> lt_style_suggestion;
     positioned_property<style_config> lt_style_selected_text;
+    positioned_property<style_config> lt_style_fuzzy_match;
     positioned_property<style_config> lt_style_re_special;
     positioned_property<style_config> lt_style_re_repeat;
     positioned_property<style_config> lt_style_diff_delete;

@@ -107,6 +107,43 @@ BEGIN
    WHERE name = NEW.name;
 END;
 
+CREATE VIEW lnav_focused_msg AS
+SELECT *,
+       log_part,
+       log_actual_time,
+       log_idle_msecs,
+       log_mark,
+       log_comment,
+       log_tags,
+       log_annotations,
+       log_filters,
+       log_opid,
+       log_user_opid,
+       log_format,
+       log_format_regex,
+       log_time_msecs,
+       log_path,
+       log_unique_path,
+       log_text,
+       log_body,
+       log_raw_text,
+       log_line_hash,
+       log_line_link
+FROM all_logs
+WHERE log_line = log_msg_line();
+
+CREATE TRIGGER lnav_focused_msg_update
+INSTEAD OF UPDATE ON lnav_focused_msg
+BEGIN
+  UPDATE all_logs
+     SET log_part = NEW.log_part,
+         log_mark = NEW.log_mark,
+         log_comment = NEW.log_comment,
+         log_tags = NEW.log_tags,
+         log_user_opid = NEW.log_user_opid
+   WHERE log_line = NEW.log_line;
+END;
+
 CREATE VIEW lnav_file_demux_metadata AS
 SELECT filepath, jget(content, '/demux_meta') AS metadata
 FROM lnav_file_metadata
@@ -151,7 +188,7 @@ VALUES ('org.lnav.breadcrumb.focus', -1, DATETIME('now', '+2 minute'),
         'Press <span class="-lnav_status-styles_hotkey">${org.lnav.key.breadcrumb.focus}</span> to focus on the breadcrumb bar');
 
 CREATE TABLE lnav_views_echo AS
-SELECT name, top, "left", height, inner_height, top_time, search
+SELECT name, top, "left", height, inner_height, top_time, search, selection
 FROM lnav_views;
 
 CREATE UNIQUE INDEX lnav_views_echo_index ON lnav_views_echo (name);

@@ -58,7 +58,6 @@ noinst_LIBRARIES = \
 	libtestdummy.a
 
 libtestdummy_a_SOURCES = \
-    ../src/lnav.prompt.cc \
 	test_stubs.cc
 
 DUMMY_OBJS = \
@@ -126,6 +125,9 @@ LDADD = \
     $(top_builddir)/src/yajlpp/libyajlpp.a \
     $(top_builddir)/src/base/libbase.a \
     $(top_builddir)/src/pugixml/libpugixml.a \
+	$(top_builddir)/src/tailer/libtailerservice.a \
+	$(top_builddir)/src/tailer/libtailercommon.a \
+	$(top_builddir)/src/tailer/libtailerpp.a \
     $(top_builddir)/src/third-party/base64/lib/libbase64.a \
     $(top_builddir)/src/third-party/date/src/libdatepp.a \
 	$(top_builddir)/src/third-party/notcurses/src/lib/liblnavnotcurses.a \
@@ -289,7 +291,11 @@ dist_noinst_DATA = \
 	datafile_simple.20 \
 	datafile_simple.21 \
 	datafile_simple.22 \
+	datafile_simple.23 \
+	datafile_simple.24 \
+	datafile_simple.25 \
 	datafile_simple.26 \
+	datafile_simple.27 \
 	datafile_xml.0 \
 	dhcp.pcapng \
 	dhcp-trunc.pcapng \
@@ -361,6 +367,7 @@ dist_noinst_DATA = \
 	logfile_leveltest.0 \
 	logfile_logfmt.0 \
 	logfile_multiline.0 \
+	logfile_muxed_syslog.0 \
 	logfile_nested_json.json \
 	logfile_nextcloud.0 \
 	logfile_openam.0 \
@@ -372,6 +379,7 @@ dist_noinst_DATA = \
 	logfile_rollover.0 \
 	logfile_rollover.1 \
 	logfile_shop_access_log.0 \
+	logfile_spark.0 \
 	logfile_strace_log.0 \
 	logfile_syslog.0 \
 	logfile_syslog.1 \
@@ -410,6 +418,8 @@ dist_noinst_DATA = \
 	textfile_0.md \
 	textfile_ansi.0 \
 	textfile_ansi_expanding.0 \
+	textfile_broken_gz.txt.gz \
+	textfile_ctrl.0 \
 	textfile_json_indented.0 \
 	textfile_json_long.0 \
 	textfile_json_one_line.0 \
@@ -477,6 +487,7 @@ dist_noinst_DATA = \
 	tui-captures/tui_help.0
 
 TESTS = \
+    document.sections.tests \
     lnav_doctests \
     test_abbrev \
 	test_ansi_scrubber \
@@ -557,6 +568,8 @@ DISTCLEANFILES = \
 	*.tmpbak \
 	*.xz \
 	exported-session.0.lnav \
+	exported-sh-session.0.lnav \
+	exported-stdin-session.0.lnav \
 	hw.txt \
 	hw2.txt \
 	reload_test.0 \

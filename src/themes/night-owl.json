@@ -16,7 +16,6 @@
                 },
                 "styles": {
                     "identifier": {
-                        "background-color": "#011627",
                         "color": "semantic()"
                     },
                     "text": {
@@ -24,7 +23,12 @@
                         "background-color": "#011627"
                     },
                     "selected-text": {
-                        "background-color": "$cyan"
+                        "background-color": "#4373c2"
+                    },
+                    "fuzzy-match": {
+                        "color": "$yellow",
+                        "underline": true,
+                        "bold": true
                     },
                     "alt-text": {
                         "background-color": "#1c1c1c"
@@ -51,13 +55,15 @@
                     },
                     "cursor-line": {
                         "color": "$cyan",
-                        "background-color": "$red",
-                        "bold": true,
-                        "underline": true
+                        "background-color": "#28505d",
+                        "bold": true
                     },
                     "disabled-cursor-line": {
                         "color": "$cyan",
-                        "background-color": "#5f005f"
+                        "background-color": "#18202d"
+                    },
+                    "time-column": {
+                        "background-color": "#112637"
                     },
                     "adjusted-time": {
                         "color": "$magenta"
@@ -83,30 +89,36 @@
                         "background-color": "#333"
                     },
                     "popup": {
-                        "color": "$base00",
-                        "background-color": "$base3"
+                        "color": "#fff",
+                        "background-color": "#011627"
+                    },
+                    "popup-border": {
+                        "color": "#5f7e97",
+                        "background-color": "#011627"
                     },
                     "scrollbar": {
                         "color": "$black",
                         "background-color": "$white"
                     },
                     "h1": {
-                        "underline": true
+                        "color": "$magenta",
+                        "bold": true
                     },
                     "h2": {
+                        "color": "$magenta",
                         "underline": true
                     },
                     "h3": {
-                        "underline": true
+                        "color": "$magenta"
                     },
                     "h4": {
                         "underline": true
                     },
                     "h5": {
-                        "underline": true
+                        "italic": true
                     },
                     "h6": {
-                        "underline": true
+                        "italic": true
                     },
                     "hr": {
                         "color": "#444"

@@ -103,6 +103,9 @@ static auto scc = injector::bind<sysclip::config>::to_instance(
 static auto oc = injector::bind<lnav::external_opener::config>::to_instance(
     +[]() { return &lnav_config.lc_opener; });
 
+static auto ee = injector::bind<lnav::external_editor::config>::to_instance(
+    +[]() { return &lnav_config.lc_external_editor; });
+
 static auto uh = injector::bind<lnav::url_handler::config>::to_instance(
     +[]() { return &lnav_config.lc_url_handlers; });
 
@@ -657,6 +660,52 @@ static const json_path_container theme_icons_handlers = {
         .with_description("Icon for error messages")
         .for_child(&lnav_theme::lt_icon_error)
         .with_children(icon_config_handlers),
+
+    yajlpp::property_handler("log-level-trace")
+        .with_description("Icon for 'trace' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_trace)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("log-level-debug")
+        .with_description("Icon for 'debug' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_debug)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("log-level-info")
+        .with_description("Icon for 'info' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_info)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("log-level-stats")
+        .with_description("Icon for 'stats' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_stats)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("log-level-notice")
+        .with_description("Icon for 'notice' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_notice)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("log-level-warning")
+        .with_description("Icon for 'warning' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_warning)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("log-level-error")
+        .with_description("Icon for 'error' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_error)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("log-level-critical")
+        .with_description("Icon for 'critical' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_critical)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("log-level-fatal")
+        .with_description("Icon for 'fatal' log level")
+        .for_child(&lnav_theme::lt_icon_log_level_fatal)
+        .with_children(icon_config_handlers),
+
+    yajlpp::property_handler("play")
+        .with_description("Icon for a 'play' button")
+        .for_child(&lnav_theme::lt_icon_play)
+        .with_children(icon_config_handlers),
+    yajlpp::property_handler("edit")
+        .with_description("Icon for a 'edit' button")
+        .for_child(&lnav_theme::lt_icon_edit)
+        .with_children(icon_config_handlers),
 };
 
 static const struct json_path_container theme_styles_handlers = {
@@ -671,6 +720,10 @@ static const struct json_path_container theme_styles_handlers = {
     yajlpp::property_handler("selected-text")
         .with_description("Styling for text selected in a view")
         .for_child(&lnav_theme::lt_style_selected_text)
+        .with_children(style_config_handlers),
+    yajlpp::property_handler("fuzzy-match")
+        .with_description("Styling for characters found in fuzzy match")
+        .for_child(&lnav_theme::lt_style_fuzzy_match)
         .with_children(style_config_handlers),
     yajlpp::property_handler("alt-text")
         .with_description("Styling for plain text when alternating")
@@ -720,6 +773,10 @@ static const struct json_path_container theme_styles_handlers = {
     yajlpp::property_handler("offset-time")
         .with_description("Styling for the elapsed time column")
         .for_child(&lnav_theme::lt_style_offset_time)
+        .with_children(style_config_handlers),
+    yajlpp::property_handler("time-column")
+        .with_description("Styling for the time column")
+        .for_child(&lnav_theme::lt_style_time_column)
         .with_children(style_config_handlers),
     yajlpp::property_handler("invalid-msg")
         .with_description("Styling for invalid log messages")
@@ -1162,7 +1219,35 @@ static const struct json_path_container theme_defs_handlers = {
         .with_children(theme_def_handlers),
 };
 
-static const struct json_path_container ui_handlers = {
+static const json_path_handler_base::enum_value_t _time_column_values[] = {
+    {"disabled", logfile_sub_source_ns::time_column_feature_t::Disabled},
+    {"enabled", logfile_sub_source_ns::time_column_feature_t::Enabled},
+    {"default", logfile_sub_source_ns::time_column_feature_t::Default},
+
+    json_path_handler_base::ENUM_TERMINATOR,
+};
+
+static const json_path_container log_view_handlers = {
+    yajlpp::property_handler("time-column")
+        .with_description(
+            "Display a column with the log message time and hide the "
+            "timestamp/level in the message.  Possible values: disabled - "
+            "never display the column; enabled - display the column when "
+            "initially scrolling right; default - display the column "
+            "initially.")
+        .with_enum_values(_time_column_values)
+        .with_example("enabled")
+        .for_field(&_lnav_config::lc_log_source,
+                   &logfile_sub_source_ns::config::c_time_column),
+};
+
+static const json_path_container views_handlers = {
+    yajlpp::property_handler("log")
+        .with_description("Log view settings")
+        .with_children(log_view_handlers),
+};
+
+static const json_path_container ui_handlers = {
     yajlpp::property_handler("clock-format")
         .with_synopsis("format")
         .with_description("The format for the clock displayed in "
@@ -1204,6 +1289,9 @@ static const struct json_path_container ui_handlers = {
     yajlpp::property_handler("keymap-defs")
         .with_description("Keymap definitions.")
         .with_children(keymap_defs_handlers),
+    yajlpp::property_handler("views")
+        .with_description("View-related settings")
+        .with_children(views_handlers),
 };
 
 static const struct json_path_container archive_handlers = {
@@ -1226,13 +1314,41 @@ static const struct json_path_container archive_handlers = {
                    &archive_manager::config::amc_cache_ttl),
 };
 
-static const struct typed_json_path_container<lnav::piper::demux_def>
+static const typed_json_path_container<lnav::piper::demux_json_def>
+    demux_json_def_handlers = {
+        yajlpp::property_handler("enabled")
+            .with_description("Indicates whether this demuxer will be used at "
+                              "the demuxing stage (defaults to 'true')")
+            .for_field(&lnav::piper::demux_json_def::djd_enabled),
+        yajlpp::property_handler("timestamp")
+            .with_synopsis("<json-ptr>")
+            .with_description("The pointer to the timestamp of the message")
+            .for_field(&lnav::piper::demux_json_def::djd_timestamp),
+        yajlpp::property_handler("mux_id")
+            .with_synopsis("<json-ptr>")
+            .with_description("The pointer to the ID for demultiplexing")
+            .for_field(&lnav::piper::demux_json_def::djd_mux_id),
+        yajlpp::property_handler("body")
+            .with_synopsis("<json-ptr>")
+            .with_description(
+                "The pointer to the property that contains the log message")
+            .for_field(&lnav::piper::demux_json_def::djd_body),
+};
+
+static const json_path_container demux_json_defs_handlers = {
+    yajlpp::pattern_property_handler("(?<name>[\\w\\-\\.]+)")
+        .with_description("The definition of a JSON demultiplexer")
+        .with_children(demux_json_def_handlers)
+        .for_field(&_lnav_config::lc_piper,
+                   &lnav::piper::config::c_demux_json_definitions),
+};
+
+static const typed_json_path_container<lnav::piper::demux_def>
     demux_def_handlers = {
-    yajlpp::property_handler("enabled")
-        .with_description(
-            "Indicates whether this demuxer will be used at the demuxing stage "
-            "(defaults to 'true')")
-        .for_field(&lnav::piper::demux_def::dd_enabled),
+        yajlpp::property_handler("enabled")
+            .with_description("Indicates whether this demuxer will be used at "
+                              "the demuxing stage (defaults to 'true')")
+            .for_field(&lnav::piper::demux_def::dd_enabled),
         yajlpp::property_handler("pattern")
             .with_synopsis("<regex>")
             .with_description(
@@ -1246,7 +1362,7 @@ static const struct typed_json_path_container<lnav::piper::demux_def>
             .for_field(&lnav::piper::demux_def::dd_control_pattern),
 };
 
-static const struct json_path_container demux_defs_handlers = {
+static const json_path_container demux_defs_handlers = {
     yajlpp::pattern_property_handler("(?<name>[\\w\\-\\.]+)")
         .with_description("The definition of a demultiplexer")
         .with_children(demux_def_handlers)
@@ -1440,7 +1556,7 @@ static const json_path_container opener_impl_handlers = {
 };
 
 static const json_path_container opener_impls_handlers = {
-    yajlpp::pattern_property_handler("(?<opener_impl_name>[\\w\\-]+)")
+    yajlpp::pattern_property_handler("(?<opener_impl_name>[\\w\\-\\.]+)")
         .with_synopsis("<name>")
         .with_description("External opener implementation")
         .with_obj_provider<lnav::external_opener::impl, _lnav_config>(
@@ -1462,6 +1578,44 @@ static const struct json_path_container opener_handlers = {
     yajlpp::property_handler("impls")
         .with_description("External opener implementations")
         .with_children(opener_impls_handlers),
+};
+
+static const json_path_container editor_impl_handlers = {
+    yajlpp::property_handler("test")
+        .with_synopsis("<command>")
+        .with_description(
+            "The command that checks if an external editor is available")
+        .with_example("command -v open")
+        .for_field(&lnav::external_editor::impl::i_test_command),
+    yajlpp::property_handler("command")
+        .with_description("The command used to open text for editing")
+        .with_example("code -")
+        .for_field(&lnav::external_editor::impl::i_command),
+};
+
+static const json_path_container editor_impls_handlers = {
+    yajlpp::pattern_property_handler("(?<editor_impl_name>[\\w\\-\\.]+)")
+        .with_synopsis("<name>")
+        .with_description("External editor implementation")
+        .with_obj_provider<lnav::external_editor::impl, _lnav_config>(
+            [](const yajlpp_provider_context& ypc, _lnav_config* root) {
+                auto& retval = root->lc_external_editor
+                                   .c_impls[ypc.get_substr("editor_impl_name")];
+                return &retval;
+            })
+        .with_path_provider<_lnav_config>(
+            [](struct _lnav_config* cfg, std::vector<std::string>& paths_out) {
+                for (const auto& iter : cfg->lc_external_editor.c_impls) {
+                    paths_out.emplace_back(iter.first);
+                }
+            })
+        .with_children(editor_impl_handlers),
+};
+
+static const json_path_container editor_handlers = {
+    yajlpp::property_handler("impls")
+        .with_description("External editor implementations")
+        .with_children(editor_impls_handlers),
 };
 
 static const struct json_path_container log_source_watch_expr_handlers = {
@@ -1561,6 +1715,9 @@ static const struct json_path_container log_source_handlers = {
     yajlpp::property_handler("demux")
         .with_description("Demultiplexer definitions")
         .with_children(demux_defs_handlers),
+    yajlpp::property_handler("demux-json")
+        .with_description("JSON Demultiplexer definitions")
+        .with_children(demux_json_defs_handlers),
 };
 
 static const struct json_path_container url_scheme_handlers = {
@@ -1612,6 +1769,10 @@ static const struct json_path_container tuning_handlers = {
     yajlpp::property_handler("external-opener")
         .with_description("Settings related to opening external files/URLs")
         .with_children(opener_handlers),
+    yajlpp::property_handler("external-editor")
+        .with_description(
+            "Settings related to opening content in an external editor")
+        .with_children(editor_handlers),
     yajlpp::property_handler("textfile")
         .with_description("Settings related to text file handling")
         .with_children(textfile_handlers),
@@ -1854,15 +2015,15 @@ load_config_from(_lnav_config& lconfig,
     }
 }
 
-static bool
-load_default_config(struct _lnav_config& config_obj,
+static size_t
+load_default_config(_lnav_config& config_obj,
                     const std::string& path,
                     const bin_src_file& bsf,
                     std::vector<lnav::console::user_message>& errors)
 {
     yajlpp_parse_context ypc_builtin(intern_string::lookup(bsf.get_name()),
                                      &lnav_config_handlers);
-    struct config_userdata ud(errors);
+    config_userdata ud(errors);
 
     auto handle
         = yajlpp::alloc_handle(&ypc_builtin.ypc_callbacks, &ypc_builtin);
@@ -1874,7 +2035,7 @@ load_default_config(struct _lnav_config& config_obj,
 
     if (path != "*") {
         ypc_builtin.ypc_ignore_unused = true;
-        ypc_builtin.ypc_active_paths.insert(path);
+        ypc_builtin.ypc_active_paths[path] = 0;
     }
 
     yajl_config(handle, yajl_allow_comments, 1);
@@ -1882,18 +2043,18 @@ load_default_config(struct _lnav_config& config_obj,
     auto sfp = bsf.to_string_fragment_producer();
     ypc_builtin.parse_doc(*sfp);
 
-    return path == "*" || ypc_builtin.ypc_active_paths.empty();
+    return path == "*" ? 1 : ypc_builtin.ypc_active_paths[path];
 }
 
-static bool
+static size_t
 load_default_configs(_lnav_config& config_obj,
                      const std::string& path,
                      std::vector<lnav::console::user_message>& errors)
 {
-    auto retval = false;
+    size_t retval = 0;
 
     for (auto& bsf : lnav_config_json) {
-        retval = load_default_config(config_obj, path, bsf, errors) || retval;
+        retval += load_default_config(config_obj, path, bsf, errors);
     }
 
     return retval;
@@ -2007,9 +2168,11 @@ reset_config(const std::string& path)
 {
     std::vector<lnav::console::user_message> errors;
 
-    load_default_configs(lnav_config, path, errors);
+    log_debug("resetting path: %s", path.c_str());
+
+    auto count = load_default_configs(lnav_config, path, errors);
     if (path != "*") {
-        static const auto INPUT_SRC = intern_string::lookup("input");
+        static const intern_string_t INPUT_SRC = intern_string::lookup("input");
 
         yajlpp_parse_context ypc(INPUT_SRC, &lnav_config_handlers);
         ypc.set_path(path)
@@ -2017,9 +2180,9 @@ reset_config(const std::string& path)
             .with_error_reporter([&errors](const auto& ypc, auto msg) {
                 errors.push_back(msg);
             });
-        ypc.ypc_active_paths.insert(path);
+        ypc.ypc_active_paths[path] = 0;
         ypc.update_callbacks();
-        const json_path_handler_base* jph = ypc.ypc_current_handler;
+        const auto* jph = ypc.ypc_current_handler;
 
         if (!ypc.ypc_handler_stack.empty()) {
             jph = ypc.ypc_handler_stack.back();
@@ -2035,6 +2198,8 @@ reset_config(const std::string& path)
 
             ypc.ypc_obj_stack.pop();
             jph->jph_obj_deleter(provider_ctx, ypc.ypc_obj_stack.top());
+        } else if (count == 0 && ypc.ypc_callbacks.yajl_null) {
+            ypc.ypc_callbacks.yajl_null(&ypc);
         }
     }
 
@@ -2089,7 +2254,14 @@ save_config()
 void
 reload_config(std::vector<lnav::console::user_message>& errors)
 {
-    for (auto* curr : lnav_config_listener::listener_list()) {
+    auto listeners = lnav_config_listener::listener_list();
+    std::stable_sort(
+        listeners.begin(),
+        listeners.end(),
+        [](const lnav_config_listener* lhs, const lnav_config_listener* rhs) {
+            return lhs->lcl_name < rhs->lcl_name;
+        });
+    for (auto* curr : listeners) {
         auto reporter = [&errors](const void* cfg_value,
                                   const lnav::console::user_message& errmsg) {
             log_error("configuration error: %s",

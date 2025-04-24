@@ -156,6 +156,8 @@ public:
 
         std::optional<bookmark_metadata*> get_metadata() const;
 
+        Result<auto_buffer, std::string> get_line_hash() const;
+
         struct metadata_edit_guard {
             ~metadata_edit_guard();
 
@@ -178,10 +180,12 @@ public:
     private:
         friend iterator;
         friend metadata_edit_guard;
+        friend logline_window;
 
         void next_msg();
         void prev_msg();
         void load_msg() const;
+        bool is_valid() const;
 
         logfile_sub_source& li_source;
         vis_line_t li_line;
@@ -238,7 +242,8 @@ class logfile_sub_source
     , public list_input_delegate
     , public text_anchors
     , public text_delegate
-    , public text_detail_provider {
+    , public text_detail_provider
+    , public lnav_config_listener {
 public:
     const static bookmark_type_t BM_FILES;
 
@@ -248,21 +253,20 @@ public:
 
     ~logfile_sub_source() = default;
 
+    enum class line_context_t : uint8_t {
+        filename,
+        basename,
+        none,
+        time_column,
+    };
+
     void increase_line_context();
 
     bool decrease_line_context();
 
     size_t get_filename_offset() const;
 
-    bool is_filename_enabled() const
-    {
-        return (bool) (this->lss_flags & F_FILENAME);
-    }
-
-    bool is_basename_enabled() const
-    {
-        return (bool) (this->lss_flags & F_BASENAME);
-    }
+    line_context_t get_line_context() const { return this->lss_line_context; }
 
     log_level_t get_min_log_level() const { return this->lss_min_log_level; }
 
@@ -364,6 +368,9 @@ public:
     std::optional<bookmark_metadata*> find_bookmark_metadata(
         vis_line_t vl) const
     {
+        if (vl >= this->lss_filtered_index.size()) {
+            return std::nullopt;
+        }
         return this->find_bookmark_metadata(this->at(vl));
     }
 
@@ -423,7 +430,7 @@ public:
 
     logfile* find_file_ptr(content_line_t& line) const
     {
-        auto retval
+        auto* retval
             = this->lss_files[line / MAX_LINES_PER_FILE]->get_file_ptr();
         line = content_line_t(line % MAX_LINES_PER_FILE);
 
@@ -461,18 +468,18 @@ public:
     std::optional<std::pair<std::shared_ptr<logfile>, logfile::iterator>>
     find_line_with_file(vis_line_t vl) const
     {
-        if (vl >= 0_vl && vl <= vis_line_t(this->lss_filtered_index.size())) {
+        if (vl >= 0_vl && vl < vis_line_t(this->lss_filtered_index.size())) {
             return this->find_line_with_file(this->at(vl));
         }
 
         return std::nullopt;
     }
 
-    std::optional<vis_line_t> find_from_time(const struct timeval& start) const;
+    std::optional<vis_line_t> find_from_time(const timeval& start) const;
 
     std::optional<vis_line_t> find_from_time(time_t start) const
     {
-        struct timeval tv = {start, 0};
+        const auto tv = timeval{start, 0};
 
         return this->find_from_time(tv);
     }
@@ -510,7 +517,9 @@ public:
 
     content_line_t at_base(vis_line_t vl)
     {
-        while (this->find_line(this->at(vl))->get_sub_offset() != 0) {
+        while (vl > 0_vl
+               && this->find_line(this->at(vl))->get_sub_offset() != 0)
+        {
             --vl;
         }
 
@@ -742,6 +751,13 @@ public:
 
     std::optional<json_string> text_row_details(const textview_curses& tc);
 
+    void reload_config(error_reporter& reporter);
+
+    bool is_indexing_in_progress() const
+    {
+        return this->lss_indexing_in_progress;
+    }
+
 protected:
     void text_accel_display_changed() { this->clear_line_size_cache(); }
 
@@ -753,20 +769,6 @@ protected:
 private:
     static const size_t LINE_SIZE_CACHE_SIZE = 512;
 
-    enum {
-        B_SCRUB,
-        B_FILENAME,
-        B_BASENAME,
-    };
-
-    enum {
-        F_SCRUB = (1UL << B_SCRUB),
-        F_FILENAME = (1UL << B_FILENAME),
-        F_BASENAME = (1UL << B_BASENAME),
-
-        F_NAME_MASK = (F_FILENAME | F_BASENAME),
-    };
-
     void clear_line_size_cache()
     {
         this->lss_line_size_cache.fill(std::make_pair(0, 0));
@@ -777,9 +779,10 @@ private:
 
     size_t lss_basename_width = 0;
     size_t lss_filename_width = 0;
-    unsigned long lss_flags{0};
+    line_context_t lss_line_context{line_context_t::none};
     bool lss_force_rebuild{false};
     std::vector<std::unique_ptr<logfile_data>> lss_files;
+    unsigned int lss_all_timestamp_flags{0};
 
     std::vector<uint32_t> lss_filtered_index;
     auto_mem<sqlite3_stmt> lss_preview_filter_stmt{sqlite3_finalize};
@@ -796,6 +799,8 @@ private:
     lnav::document::metadata lss_token_meta;
     int lss_token_meta_line{-1};
     int lss_token_meta_size{0};
+    size_t lss_time_column_size{0};
+    size_t lss_time_column_padding{0};
     logline_value_vector lss_token_values;
     int lss_token_shift_start{0};
     int lss_token_shift_size{0};

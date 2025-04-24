@@ -30,8 +30,6 @@
 #ifndef LNAV_READLINE_CALLBACKS_HH
 #define LNAV_READLINE_CALLBACKS_HH
 
-#include <string>
-
 #include "readline_context.hh"
 #include "textinput_curses.hh"
 
@@ -40,15 +38,13 @@ void rl_change(textinput_curses& ti);
 void rl_search(textinput_curses& ti);
 void lnav_rl_abort(textinput_curses& ti);
 void rl_callback(textinput_curses& ti);
-void rl_alt_callback(textinput_curses& ti);
 void rl_display_matches(textinput_curses& ti);
 void rl_display_next(textinput_curses& ti);
 void rl_completion_request(textinput_curses& ti);
 void rl_focus(textinput_curses& ti);
 void rl_blur(textinput_curses& ti);
 
-readline_context::split_result_t prql_splitter(readline_context& rc,
-                                               const std::string& cmdline);
+readline_context::split_result_t prql_splitter(const attr_line_t& stmt);
 
 extern const char* const RE_HELP;
 extern const char* const RE_EXAMPLE;

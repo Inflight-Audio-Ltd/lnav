@@ -13,6 +13,12 @@ printf '000\n000\n#Fields: 0\n0\n#Fields: 0\n0' | run_cap_test \
 printf '#Date:\t3/9/3/0\x85 2\n0\n' | run_cap_test \
     env TEST_COMMENT="invalid w3c timestamp" ${lnav_test} -n
 
+printf '[8.0000]0\n' | run_cap_test \
+    env TEST_COMMENT="zero timestamp" ${lnav_test} -n
+
+printf '#Fields: date time 0 date\n2000/2 00:00 0 2000/80' | run_cap_test \
+    env TEST_COMMENT="invalid w3c #1451" ${lnav_test} -n
+
 cat > rollover_in.0 <<EOF
 2600/2 0 00:00:00 0:
 00:2 0 00:00:00 0:
@@ -223,6 +229,9 @@ EOF
   error: unable to open file: /test-logs.tgz
  reason: unable to create directory: rotmp/lnav-user-NNN-work/archives -- Permission denied
 EOF
+
+    run_cap_test env TMPDIR=logfile-tmp ${lnav_test} -n \
+        ${srcdir}/abs-archive.tar.gz
 fi
 
 touch unreadable.log
@@ -747,3 +756,6 @@ touch -t 202411030000 ${test_dir}/logfile_dst.0
 run_cap_test env TZ=America/Los_Angeles ${lnav_test} -n \
     -c ':set-file-timezone America/Los_Angeles' \
     ${test_dir}/logfile_dst.0
+
+cat ${test_dir}/logfile_generic.0 | run_cap_test ${lnav_test} -n \
+    -c ':test-comment generic before piper'

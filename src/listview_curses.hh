@@ -71,11 +71,6 @@ public:
                                          vis_line_t row)
         = 0;
 
-    virtual std::string listview_source_name(const listview_curses& lv)
-    {
-        return "";
-    }
-
     virtual bool listview_is_row_selectable(const listview_curses& lv,
                                             vis_line_t row)
     {
@@ -174,10 +169,6 @@ public:
 
     listview_curses(const listview_curses&) = delete;
     listview_curses(listview_curses&) = delete;
-
-    void set_title(const std::string& title) { this->lv_title = title; }
-
-    const std::string& get_title() const { return this->lv_title; }
 
     /** @param src The data source delegate. */
     void set_data_source(list_data_source* src)
@@ -323,12 +314,16 @@ public:
                               vis_line_t height,
                               unsigned long width) const;
 
-    template<typename F>
-    auto map_top_row(F func) const
-        -> std::invoke_result_t<F, const attr_line_t&>
+    template<typename F,
+             typename R = std::invoke_result_t<F, const attr_line_t&>>
+    auto map_top_row(F func) const -> R
     {
         if (this->lv_top >= this->get_inner_height()) {
-            return std::nullopt;
+            if constexpr (std::is_same_v<R, void>) {
+                return;
+            } else {
+                return std::nullopt;
+            }
         }
 
         std::vector<attr_line_t> top_line{1};
@@ -488,6 +483,15 @@ public:
 
     std::optional<view_curses*> contains(int x, int y) override;
 
+    listview_curses& set_head_space(vis_line_t space)
+    {
+        this->lv_head_space = space;
+
+        return *this;
+    }
+
+    vis_line_t get_head_space() const { return this->lv_head_space; }
+
     listview_curses& set_tail_space(vis_line_t space)
     {
         this->lv_tail_space = space;
@@ -501,9 +505,9 @@ public:
     {
         log_debug("listview_curses=%p", this);
         log_debug(
-            "  lv_title=%s; vc_y=%u; lv_top=%d; lv_left=%d; lv_height=%d; "
+            "  vc_title=%s; vc_y=%u; lv_top=%d; lv_left=%d; lv_height=%d; "
             "lv_selection=%d; inner_height=%d",
-            this->lv_title.c_str(),
+            this->vc_title.c_str(),
             this->vc_y,
             (int) this->lv_top,
             this->lv_left,
@@ -524,8 +528,8 @@ public:
     struct overlay_content {
         vis_line_t oc_main_line;
         vis_line_t oc_line;
-        size_t oc_height{0};
-        size_t oc_inner_height{0};
+        vis_line_t oc_height{0};
+        vis_line_t oc_inner_height{0};
     };
     struct empty_space {};
 
@@ -550,7 +554,7 @@ protected:
     void update_top_from_selection();
 
     vis_line_t get_overlay_top(vis_line_t row, size_t count, size_t total);
-    size_t get_overlay_height(size_t total, vis_line_t view_height) const;
+    vis_line_t get_overlay_height(size_t total, vis_line_t view_height) const;
 
     enum class lv_mode_t {
         NONE,
@@ -561,7 +565,6 @@ protected:
 
     static list_gutter_source DEFAULT_GUTTER_SOURCE;
 
-    std::string lv_title;
     list_data_source* lv_source{nullptr}; /*< The data source delegate. */
     std::list<list_input_delegate*> lv_input_delegates;
     list_overlay_source* lv_overlay_source{nullptr};
@@ -588,12 +591,13 @@ protected:
     int lv_scroll_velo{0};
     int lv_mouse_y{-1};
     lv_mode_t lv_mouse_mode{lv_mode_t::NONE};
-    vis_line_t lv_tail_space{1};
+    vis_line_t lv_head_space{1_vl};
+    vis_line_t lv_tail_space{1_vl};
 
     vis_line_t lv_display_lines_row{0_vl};
     std::vector<display_line_content_t> lv_display_lines;
-    unsigned int lv_scroll_top{0};
-    unsigned int lv_scroll_bottom{0};
+    int lv_scroll_top{0};
+    int lv_scroll_bottom{0};
 };
 
 #endif

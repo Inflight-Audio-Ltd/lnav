@@ -29,6 +29,7 @@
  * @file logfile.cc
  */
 
+#include <filesystem>
 #include <utility>
 
 #include "logfile.hh"
@@ -42,6 +43,7 @@
 #include <time.h>
 
 #include "base/ansi_scrubber.hh"
+#include "base/attr_line.builder.hh"
 #include "base/date_time_scanner.cfg.hh"
 #include "base/fs_util.hh"
 #include "base/injector.hh"
@@ -244,6 +246,9 @@ logfile::file_options_have_changed()
         if (this->lf_file_options_generation == options_hier->foh_generation) {
             return false;
         }
+        log_info("checking new generation of file options: %d -> %d",
+                 this->lf_file_options_generation,
+                 options_hier->foh_generation);
         auto new_options = options_hier->match(this->get_filename());
         if (this->lf_file_options == new_options) {
             this->lf_file_options_generation = options_hier->foh_generation;
@@ -298,8 +303,7 @@ logfile::exists() const
 
     auto st = stat_res.unwrap();
     return this->lf_stat.st_dev == st.st_dev
-        && this->lf_stat.st_ino == st.st_ino
-        && this->lf_stat.st_size <= st.st_size;
+        && this->lf_stat.st_ino == st.st_ino;
 }
 
 auto
@@ -310,9 +314,11 @@ logfile::reset_state() -> void
 }
 
 void
-logfile::set_format_base_time(log_format* lf)
+logfile::set_format_base_time(log_format* lf, const line_info& li)
 {
-    time_t file_time = this->lf_line_buffer.get_file_time();
+    time_t file_time = li.li_timestamp.tv_sec != 0
+        ? li.li_timestamp.tv_sec
+        : this->lf_line_buffer.get_file_time();
 
     if (file_time == 0) {
         file_time = this->lf_stat.st_mtime;
@@ -321,7 +327,7 @@ logfile::set_format_base_time(log_format* lf)
     if (!this->lf_cached_base_time
         || this->lf_cached_base_time.value() != file_time)
     {
-        struct tm new_base_tm;
+        tm new_base_tm;
         this->lf_cached_base_time = file_time;
         localtime_r(&file_time, &new_base_tm);
         this->lf_cached_base_tm = new_base_tm;
@@ -352,6 +358,10 @@ logfile::process_prefix(shared_buffer_ref& sbr,
             best_match;
         size_t scan_count = 0;
 
+        if (!this->lf_index.empty()) {
+            prescan_time = this->lf_index[prescan_size - 1]
+                               .get_time<std::chrono::microseconds>();
+        }
         if (this->lf_format != nullptr) {
             best_match = std::make_pair(
                 this->lf_format.get(),
@@ -427,7 +437,7 @@ logfile::process_prefix(shared_buffer_ref& sbr,
 
             scan_count += 1;
             curr->clear();
-            this->set_format_base_time(curr.get());
+            this->set_format_base_time(curr.get(), li);
             log_format::scan_result_t scan_res{mapbox::util::no_init{}};
             if (this->lf_format != nullptr
                 && this->lf_format->lf_root_format == curr.get())
@@ -451,12 +461,18 @@ logfile::process_prefix(shared_buffer_ref& sbr,
                         prev_index_size = this->lf_index.size();
                         found = best_match->second;
                     } else if (!best_match
-                               || sm.sm_quality > best_match->second.sm_quality)
+                               || (sm.sm_quality > best_match->second.sm_quality
+                                   || (sm.sm_quality
+                                           == best_match->second.sm_quality
+                                       && sm.sm_strikes
+                                           < best_match->second.sm_strikes)))
                     {
                         log_info(
-                            "  scan with format (%s) matched with quality (%d)",
+                            "  scan with format (%s) matched with quality of "
+                            "%d and %d strikes",
                             curr->get_name().c_str(),
-                            sm.sm_quality);
+                            sm.sm_quality,
+                            sm.sm_strikes);
 
                         auto match_um
                             = lnav::console::user_message::info(
@@ -469,7 +485,11 @@ logfile::process_prefix(shared_buffer_ref& sbr,
                                   .with_note(
                                       attr_line_t("match quality is ")
                                           .append(lnav::roles::number(
-                                              fmt::to_string(sm.sm_quality))))
+                                              fmt::to_string(sm.sm_quality)))
+                                          .append(" with ")
+                                          .append(lnav::roles::number(
+                                              fmt::to_string(sm.sm_strikes)))
+                                          .append(" strikes"))
                                   .move();
                         this->lf_format_match_messages.emplace_back(match_um);
                         if (best_match) {
@@ -482,11 +502,15 @@ logfile::process_prefix(shared_buffer_ref& sbr,
                         best_match = std::make_pair(curr.get(), sm);
                         prev_index_size = this->lf_index.size();
                     } else {
-                        log_info(
+                        log_trace(
                             "  scan with format (%s) matched, but "
-                            "is low quality (%d)",
+                            "is lower quality (%d < %d) or more strikes (%d "
+                            "vs. %d)",
                             curr->get_name().c_str(),
-                            sm.sm_quality);
+                            sm.sm_quality,
+                            best_match->second.sm_quality,
+                            sm.sm_strikes,
+                            best_match->second.sm_strikes);
                         while (this->lf_index.size() > prev_index_size) {
                             this->lf_index.pop_back();
                         }
@@ -538,7 +562,7 @@ logfile::process_prefix(shared_buffer_ref& sbr,
             this->lf_text_format = text_format_t::TF_LOG;
             this->lf_format = curr->specialized();
             this->lf_format_quality = winner.second.sm_quality;
-            this->set_format_base_time(this->lf_format.get());
+            this->set_format_base_time(this->lf_format.get(), li);
             if (this->lf_format->lf_date_time.dts_fmt_lock != -1) {
                 this->lf_content_id
                     = hasher().update(sbr.get_data(), sbr.length()).to_string();
@@ -796,15 +820,46 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
     // Check the previous stat against the last to see if things are wonky.
     if (this->lf_named_file && (is_truncated || is_user_provided_and_rewritten))
     {
-        log_info("overwritten file detected, closing -- %s  new: %" PRId64
-                 "/%" PRId64 "  old: %" PRId64 "/%" PRId64,
-                 this->lf_filename.c_str(),
-                 st.st_size,
-                 st.st_mtime,
-                 this->lf_stat.st_size,
-                 this->lf_stat.st_mtime);
-        this->close();
-        return rebuild_result_t::NO_NEW_LINES;
+        auto is_overwritten = true;
+        if (this->lf_format != nullptr) {
+            const auto first_line = this->lf_index.begin();
+            const auto first_line_range
+                = this->get_file_range(first_line, false);
+            auto read_res = this->read_range(first_line_range);
+            if (read_res.isOk()) {
+                auto sbr = read_res.unwrap();
+                if (first_line->has_ansi()) {
+                    sbr.erase_ansi();
+                }
+                auto curr_content_id
+                    = hasher().update(sbr.get_data(), sbr.length()).to_string();
+
+                log_info(
+                    "%s: overwrite content_id double check: old:%s; now:%s",
+                    this->lf_filename.c_str(),
+                    this->lf_content_id.c_str(),
+                    curr_content_id.c_str());
+                if (this->lf_content_id == curr_content_id) {
+                    is_overwritten = false;
+                }
+            } else {
+                auto errmsg = read_res.unwrapErr();
+                log_error("unable to read first line for overwrite check: %s",
+                          errmsg.c_str());
+            }
+        }
+
+        if (is_truncated || is_overwritten) {
+            log_info("overwritten file detected, closing -- %s  new: %" PRId64
+                     "/%" PRId64 "  old: %" PRId64 "/%" PRId64,
+                     this->lf_filename.c_str(),
+                     st.st_size,
+                     st.st_mtime,
+                     this->lf_stat.st_size,
+                     this->lf_stat.st_mtime);
+            this->close();
+            return rebuild_result_t::NO_NEW_LINES;
+        }
     }
 
     if (this->lf_text_format == text_format_t::TF_BINARY) {
@@ -823,7 +878,7 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
         size_t begin_size = this->lf_index.size();
         bool record_rusage = this->lf_index.size() == 1;
         off_t begin_index_size = this->lf_index_size;
-        size_t rollback_size = 0;
+        size_t rollback_size = 0, rollback_index_start = 0;
 
         if (record_rusage) {
             getrusage(RUSAGE_SELF, &begin_rusage);
@@ -845,19 +900,45 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
                 rollback_size += 1;
             }
             this->lf_index.pop_back();
+            rollback_index_start = this->lf_index.size();
             rollback_size += 1;
 
             if (!this->lf_index.empty()) {
-                auto last_line = this->lf_index.end();
-                --last_line;
-                auto check_line_off = last_line->get_offset();
+                auto last_line = std::prev(this->lf_index.end());
+                if (last_line != this->lf_index.begin()) {
+                    auto prev_line = std::prev(last_line);
+                    this->lf_line_buffer.flush_at(prev_line->get_offset());
+                    auto prev_len_res
+                        = this->message_byte_length(prev_line, false);
+
+                    auto read_result = this->lf_line_buffer.read_range({
+                        prev_line->get_offset(),
+                        prev_len_res.mlr_length + 1,
+                    });
+                    if (read_result.isErr()) {
+                        log_info(
+                            "overwritten file detected, closing -- %s (%s)",
+                            this->lf_filename.c_str(),
+                            read_result.unwrapErr().c_str());
+                        this->close();
+                        return rebuild_result_t::INVALID;
+                    }
+
+                    auto sbr = read_result.unwrap();
+                    if (!sbr.to_string_fragment().endswith("\n")) {
+                        log_info("overwritten file detected, closing -- %s",
+                                 this->lf_filename.c_str());
+                        this->close();
+                        return rebuild_result_t::INVALID;
+                    }
+                } else {
+                    this->lf_line_buffer.flush_at(last_line->get_offset());
+                }
                 auto last_length_res
                     = this->message_byte_length(last_line, false);
-                log_debug("flushing at %" PRIu64, check_line_off);
-                this->lf_line_buffer.flush_at(check_line_off);
 
                 auto read_result = this->lf_line_buffer.read_range({
-                    check_line_off,
+                    last_line->get_offset(),
                     last_length_res.mlr_length,
                 });
 
@@ -953,16 +1034,6 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
                 }
                 break;
             }
-            if (this->lf_format != nullptr
-                && !li.li_utf8_scan_result.is_valid())
-            {
-                log_warning("%s: invalid UTF-8 detected at %d:%d -- %s",
-                            this->lf_filename.c_str(),
-                            this->lf_index.size() + 1,
-                            li.li_utf8_scan_result.usr_valid_frag.sf_end,
-                            li.li_utf8_scan_result.usr_message);
-            }
-
             size_t old_size = this->lf_index.size();
 
             if (old_size == 0
@@ -994,6 +1065,8 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
                               if (is_utf8(sbr_str).is_valid()) {
                                   auto new_size = erase_ansi_escapes(sbr_str);
                                   sbr_str.resize(new_size);
+                              } else {
+                                  return text_format_t::TF_BINARY;
                               }
                               return detect_text_format(sbr_str, path);
                           })
@@ -1030,6 +1103,22 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
             }
 
             auto sbr = read_result.unwrap();
+
+            if (!li.li_utf8_scan_result.is_valid()) {
+                attr_line_t al;
+                attr_line_builder alb(al);
+                log_warning(
+                    "%s: invalid UTF-8 detected at L%d:C%d/%d (O:%lld) -- %s",
+                    this->lf_filename.c_str(),
+                    this->lf_index.size() + 1,
+                    li.li_utf8_scan_result.usr_valid_frag.sf_end,
+                    li.li_file_range.fr_size,
+                    li.li_file_range.fr_offset,
+                    li.li_utf8_scan_result.usr_message);
+                alb.append_as_hexdump(sbr.to_string_fragment());
+                log_warning("  dump: %s", al.al_string.c_str());
+            }
+
             sbr.rtrim(is_line_ending);
 
             if (li.li_utf8_scan_result.is_valid()
@@ -1052,8 +1141,18 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
             this->lf_index_size = li.li_file_range.next_offset();
 
             if (this->lf_logline_observer != nullptr) {
-                this->lf_logline_observer->logline_new_lines(
+                auto nl_rc = this->lf_logline_observer->logline_new_lines(
                     *this, this->begin() + old_size, this->end(), sbr);
+                if (rollback_size > 0 && old_size == rollback_index_start
+                    && nl_rc)
+                {
+                    log_debug(
+                        "%s: rollbacked line %zu matched filter, forcing "
+                        "full sort",
+                        this->lf_filename.c_str(),
+                        rollback_index_start);
+                    sort_needed = true;
+                }
             }
 
             if (this->lf_logfile_observer != nullptr) {
@@ -1063,7 +1162,7 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
                         li.li_file_range.next_offset()),
                     st.st_size);
 
-                if (indexing_res == logfile_observer::indexing_result::BREAK) {
+                if (indexing_res == lnav::progress_result_t::interrupt) {
                     break;
                 }
             }
@@ -1229,7 +1328,14 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
                 this->lf_allocator.getNumBytesAllocated());
         }
 
-        if (sort_needed) {
+        if (begin_size > this->lf_index.size()) {
+            log_info("overwritten file detected, closing -- %s",
+                     this->lf_filename.c_str());
+            this->close();
+            return rebuild_result_t::INVALID;
+        }
+
+        if (sort_needed || begin_size > this->lf_index.size()) {
             retval = rebuild_result_t::NEW_ORDER;
         } else {
             retval = rebuild_result_t::NEW_LINES;
@@ -1241,9 +1347,12 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
                 this->lf_index.reserve(this->lf_index.size() + est_rem);
             }
         }
-    } else if (this->lf_sort_needed) {
-        retval = rebuild_result_t::NEW_ORDER;
-        this->lf_sort_needed = false;
+    } else {
+        this->lf_stat = st;
+        if (this->lf_sort_needed) {
+            retval = rebuild_result_t::NEW_ORDER;
+            this->lf_sort_needed = false;
+        }
     }
 
     this->lf_index_time
@@ -1287,7 +1396,7 @@ logfile::read_line(logfile::iterator ll)
 }
 
 Result<logfile::read_file_result, std::string>
-logfile::read_file()
+logfile::read_file(read_format_t format)
 {
     if (this->lf_stat.st_size > line_buffer::MAX_LINE_BUFFER_SIZE) {
         return Err(std::string("file is too large to read"));
@@ -1296,19 +1405,23 @@ logfile::read_file()
     auto retval = read_file_result{};
     retval.rfr_content.reserve(this->lf_stat.st_size);
 
-    retval.rfr_content.append(this->lf_line_buffer.get_piper_header_size(),
-                              '\x16');
+    if (format == read_format_t::with_framing) {
+        retval.rfr_content.append(this->lf_line_buffer.get_piper_header_size(),
+                                  '\x16');
+    }
     for (auto iter = this->begin(); iter != this->end(); ++iter) {
         const auto fr = this->get_file_range(iter);
         retval.rfr_range.fr_metadata |= fr.fr_metadata;
         retval.rfr_range.fr_size = fr.next_offset();
         auto sbr = TRY(this->lf_line_buffer.read_range(fr));
 
-        if (this->lf_line_buffer.is_piper()) {
+        if (format == read_format_t::with_framing
+            && this->lf_line_buffer.is_piper())
+        {
             retval.rfr_content.append(22, '\x16');
         }
         retval.rfr_content.append(sbr.get_data(), sbr.length());
-        if (retval.rfr_content.size() < this->lf_stat.st_size) {
+        if ((file_ssize_t) retval.rfr_content.size() < this->lf_stat.st_size) {
             retval.rfr_content.push_back('\n');
         }
     }
@@ -1384,7 +1497,7 @@ logfile::reobserve_from(iterator iter)
         if (this->lf_logfile_observer != nullptr) {
             auto indexing_res = this->lf_logfile_observer->logfile_indexing(
                 this, offset, this->size());
-            if (indexing_res == logfile_observer::indexing_result::BREAK) {
+            if (indexing_res == lnav::progress_result_t::interrupt) {
                 break;
             }
         }
@@ -1417,7 +1530,7 @@ logfile::message_byte_length(logfile::const_iterator ll, bool include_continues)
 {
     auto next_line = ll;
     file_range::metadata meta;
-    size_t retval;
+    file_ssize_t retval;
 
     if (!include_continues && this->lf_next_line_cache) {
         if (ll->get_offset() == (*this->lf_next_line_cache).first) {
@@ -1452,7 +1565,7 @@ logfile::message_byte_length(logfile::const_iterator ll, bool include_continues)
         }
     }
 
-    return {(file_ssize_t) retval, meta};
+    return {retval, meta};
 }
 
 Result<shared_buffer_ref, std::string>

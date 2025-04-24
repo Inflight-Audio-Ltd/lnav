@@ -44,6 +44,7 @@
 #include <algorithm>
 #include <set>
 
+#include "base/auto_mem.hh"
 #include "base/auto_pid.hh"
 #include "base/fs_util.hh"
 #include "base/injector.bind.hh"
@@ -57,6 +58,7 @@
 #include "line_buffer.hh"
 #include "piper.header.hh"
 #include "scn/scan.h"
+#include "yajlpp/yajlpp_def.hh"
 
 using namespace std::chrono_literals;
 
@@ -95,7 +97,7 @@ class lock_hack {
 public:
     class guard {
     public:
-        guard() : g_lock(lock_hack::singleton()) { this->g_lock.lock(); }
+        guard() : g_lock(singleton()) { this->g_lock.lock(); }
 
         ~guard() { this->g_lock.unlock(); }
 
@@ -231,6 +233,8 @@ line_buffer::gz_indexed::open(int fd, lnav::gzip::header& hd)
                     break;
                 case 1:
                     hd.h_mtime.tv_sec = gz_hd.time;
+                    name[sizeof(name) - 1] = '\0';
+                    comment[sizeof(comment) - 1] = '\0';
                     hd.h_name = std::string((char*) name);
                     hd.h_comment = std::string((char*) comment);
                     log_info(
@@ -281,10 +285,15 @@ line_buffer::gz_indexed::stream_data(void* buf, size_t size)
                 // stream
                 continue_stream();
             } else if (err != Z_OK) {
-                log_error(" inflate-error at %d: %d  %s",
+                log_error(" inflate-error at offset %d: %d  %s",
                           this->strm.total_in,
                           (int) err,
                           this->strm.msg ? this->strm.msg : "");
+                this->parent->lb_decompress_error = fmt::format(
+                    FMT_STRING("inflate-error at offset {}: {}  {}"),
+                    this->strm.total_in,
+                    err,
+                    this->strm.msg ? this->strm.msg : "");
                 break;
             }
 
@@ -365,6 +374,8 @@ line_buffer::gz_indexed::read(void* buf, size_t offset, size_t size)
 
 line_buffer::line_buffer()
 {
+    this->lb_gz_file.writeAccess()->parent = this;
+
     ensure(this->invariant());
 }
 
@@ -494,8 +505,9 @@ line_buffer::set_fd(auto_fd& fd)
 void
 line_buffer::resize_buffer(size_t new_max)
 {
-    if (new_max <= MAX_LINE_BUFFER_SIZE
-        && new_max > (size_t) this->lb_buffer.capacity())
+    if (((this->lb_compressed && new_max <= MAX_COMPRESSED_BUFFER_SIZE)
+         || (!this->lb_compressed && new_max <= MAX_LINE_BUFFER_SIZE))
+        && !this->lb_buffer.has_capacity_for(new_max))
     {
         /* Still need more space, try a realloc. */
         this->lb_share_manager.invalidate_refs();
@@ -508,7 +520,7 @@ line_buffer::ensure_available(file_off_t start,
                               ssize_t max_length,
                               scan_direction dir)
 {
-    ssize_t prefill, available;
+    ssize_t prefill;
 
     require(this->lb_compressed || max_length <= MAX_LINE_BUFFER_SIZE);
 
@@ -540,7 +552,7 @@ line_buffer::ensure_available(file_off_t start,
                 break;
             case scan_direction::backward: {
                 auto padded_max_length = max_length * 4;
-                if (padded_max_length < this->lb_buffer.capacity()) {
+                if (this->lb_buffer.has_capacity_for(padded_max_length)) {
                     start = std::max(
                         file_off_t{0},
                         static_cast<file_off_t>(start
@@ -559,7 +571,9 @@ line_buffer::ensure_available(file_off_t start,
              * If the start is near the end of the file, move the offset back a
              * bit so we can get more of the file in the cache.
              */
-            if (start + this->lb_buffer.capacity() > this->lb_file_size) {
+            if (start + (ssize_t) this->lb_buffer.capacity()
+                > this->lb_file_size)
+            {
                 this->lb_file_offset = this->lb_file_size
                     - std::min(this->lb_file_size,
                                (file_ssize_t) this->lb_buffer.capacity());
@@ -574,11 +588,10 @@ line_buffer::ensure_available(file_off_t start,
         prefill = start - this->lb_file_offset;
     }
     require(this->lb_file_offset <= start);
-    require(prefill <= this->lb_buffer.size());
+    require(prefill <= (ssize_t) this->lb_buffer.size());
 
-    available = this->lb_buffer.capacity() - (start - this->lb_file_offset);
-    require(available <= this->lb_buffer.capacity());
-
+    ssize_t available
+        = this->lb_buffer.capacity() - (start - this->lb_file_offset);
     if (max_length > available) {
         // log_debug("need more space!");
         /*
@@ -625,12 +638,16 @@ line_buffer::load_next_buffer()
                           start + this->lb_alt_buffer.value().size(),
                           this->lb_alt_buffer.value().available());
             this->lb_compressed_offset = gi->get_source_offset();
-            if (rc != -1 && (rc < this->lb_alt_buffer.value().available())
-                && (start + this->lb_alt_buffer.value().size() + rc
+            if (rc != -1
+                && rc < (ssize_t) this->lb_alt_buffer.value().available()
+                && (start + (ssize_t) this->lb_alt_buffer.value().size() + rc
                     > this->lb_file_size))
             {
                 this->lb_file_size
                     = (start + this->lb_alt_buffer.value().size() + rc);
+                log_info("fd(%d): set file size to %llu",
+                         this->lb_fd.get(),
+                         this->lb_file_size);
             }
 #if 0
             log_debug("async decomp end  %d+%d:%d",
@@ -689,12 +706,16 @@ line_buffer::load_next_buffer()
             this->lb_compressed_offset = lseek(bzfd, 0, SEEK_SET);
             BZ2_bzclose(bz_file);
 
-            if (rc != -1 && (rc < (this->lb_alt_buffer.value().available()))
-                && (start + this->lb_alt_buffer.value().size() + rc
+            if (rc != -1
+                && (rc < (ssize_t) (this->lb_alt_buffer.value().available()))
+                && (start + (ssize_t) this->lb_alt_buffer.value().size() + rc
                     > this->lb_file_size))
             {
                 this->lb_file_size
                     = (start + this->lb_alt_buffer.value().size() + rc);
+                log_info("fd(%d): set file size to %llu",
+                         this->lb_fd.get(),
+                         this->lb_file_size);
             }
         }
     }
@@ -709,7 +730,7 @@ line_buffer::load_next_buffer()
     }
     // XXX For some reason, cygwin is giving us a bogus return value when
     // up to the end of the file.
-    if (rc > (this->lb_alt_buffer.value().available())) {
+    if (rc > (ssize_t) this->lb_alt_buffer.value().available()) {
         rc = -1;
 #ifdef ENODATA
         errno = ENODATA;
@@ -752,10 +773,11 @@ line_buffer::load_next_buffer()
 
         do {
             auto before = line_start - this->lb_alt_buffer->begin();
-            auto remaining = this->lb_alt_buffer.value().size() - before;
-            auto frag = string_fragment::from_bytes(line_start, remaining);
+            const auto remaining = this->lb_alt_buffer.value().size() - before;
+            const auto frag
+                = string_fragment::from_bytes(line_start, remaining);
             auto utf_scan_res = is_utf8(frag, '\n');
-            auto lf = utf_scan_res.remaining_ptr();
+            const auto* lf = utf_scan_res.remaining_ptr();
             this->lb_alt_line_starts.emplace_back(before);
             this->lb_alt_line_is_utf.emplace_back(utf_scan_res.is_valid());
             this->lb_alt_line_has_ansi.emplace_back(utf_scan_res.usr_has_ansi);
@@ -889,9 +911,13 @@ line_buffer::fill_range(file_off_t start,
                               this->lb_file_offset + this->lb_buffer.size(),
                               this->lb_buffer.available());
                 this->lb_compressed_offset = gi->get_source_offset();
-                if (rc != -1 && (rc < this->lb_buffer.available())) {
+                if (rc != -1 && (rc < (ssize_t) this->lb_buffer.available())) {
                     this->lb_file_size
                         = (this->lb_file_offset + this->lb_buffer.size() + rc);
+                    log_info("fd(%d): rc (%d) -- set file size to %llu",
+                             this->lb_fd.get(),
+                             rc,
+                             this->lb_file_size);
                 }
             }
 #if 0
@@ -951,9 +977,12 @@ line_buffer::fill_range(file_off_t start,
                 this->lb_compressed_offset = lseek(bzfd, 0, SEEK_SET);
                 BZ2_bzclose(bz_file);
 
-                if (rc != -1 && (rc < (this->lb_buffer.available()))) {
+                if (rc != -1 && (rc < (ssize_t) this->lb_buffer.available())) {
                     this->lb_file_size
                         = (this->lb_file_offset + this->lb_buffer.size() + rc);
+                    log_info("fd(%d): set file size to %llu",
+                             this->lb_fd.get(),
+                             this->lb_file_size);
                 }
             }
         }
@@ -984,7 +1013,7 @@ line_buffer::fill_range(file_off_t start,
         }
         // XXX For some reason, cygwin is giving us a bogus return value when
         // up to the end of the file.
-        if (rc > (this->lb_buffer.available())) {
+        if (rc > (ssize_t) this->lb_buffer.available()) {
             rc = -1;
 #ifdef ENODATA
             errno = ENODATA;
@@ -1098,7 +1127,9 @@ line_buffer::load_next_line(file_range prev_line)
     retval.li_file_range.fr_offset = offset;
     if (this->lb_buffer.empty() || !this->in_range(offset)) {
         this->fill_range(offset, this->lb_buffer.capacity());
-    } else if (offset == this->lb_file_offset + this->lb_buffer.size()) {
+    } else if (offset
+               == this->lb_file_offset + (ssize_t) this->lb_buffer.size())
+    {
         if (!this->fill_range(offset, INITIAL_REQUEST_SIZE)) {
             retval.li_file_range.fr_offset = offset;
             retval.li_file_range.fr_size = 0;
@@ -1127,11 +1158,18 @@ line_buffer::load_next_line(file_range prev_line)
         /* ... look for the end-of-line or end-of-file. */
         ssize_t utf8_end = -1;
 
-        bool found_in_cache = false;
+        if (!retval.li_utf8_scan_result.is_valid()) {
+            retval.li_utf8_scan_result = {};
+        }
+        auto found_in_cache = false;
+        auto has_ansi = false;
+        auto valid_utf8 = true;
         if (!this->lb_line_starts.empty()) {
             auto buffer_offset = offset - this->lb_file_offset;
 
             if (this->lb_next_buffer_offset == buffer_offset) {
+                require(this->lb_next_line_start_index
+                        < this->lb_line_starts.size());
                 auto start_iter = this->lb_line_starts.begin()
                     + this->lb_next_line_start_index;
                 auto next_line_iter = start_iter + 1;
@@ -1139,7 +1177,12 @@ line_buffer::load_next_line(file_range prev_line)
                     utf8_end = *next_line_iter - 1 - *start_iter;
                     found_in_cache = true;
                     lf = line_start + utf8_end;
+                    has_ansi = this->lb_line_has_ansi
+                                   [this->lb_next_line_start_index];
+                    valid_utf8
+                        = this->lb_line_is_utf[this->lb_next_line_start_index];
 
+                    // log_debug("hit cache");
                     this->lb_next_buffer_offset = *next_line_iter;
                     this->lb_next_line_start_index += 1;
                 } else {
@@ -1155,12 +1198,15 @@ line_buffer::load_next_line(file_range prev_line)
                     // log_debug("found offset %d %d", buffer_offset,
                     // *start_iter);
                     if (next_line_iter != this->lb_line_starts.end()) {
+                        auto start_index = std::distance(
+                            this->lb_line_starts.begin(), start_iter);
                         utf8_end = *next_line_iter - 1 - *start_iter;
                         found_in_cache = true;
                         lf = line_start + utf8_end;
+                        has_ansi = this->lb_line_has_ansi[start_index];
+                        valid_utf8 = this->lb_line_is_utf[start_index];
 
-                        this->lb_next_line_start_index = std::distance(
-                            this->lb_alt_line_starts.begin(), next_line_iter);
+                        this->lb_next_line_start_index = start_index + 1;
                         this->lb_next_buffer_offset = *next_line_iter;
                     } else {
                         // log_debug("no next iter");
@@ -1171,7 +1217,9 @@ line_buffer::load_next_line(file_range prev_line)
             }
         }
 
-        if (!found_in_cache) {
+        if (found_in_cache && valid_utf8) {
+            retval.li_utf8_scan_result.usr_has_ansi = has_ansi;
+        } else {
             auto frag = string_fragment::from_bytes(
                 line_start, retval.li_file_range.fr_size);
             auto scan_res = is_utf8(frag, '\n');
@@ -1180,6 +1228,10 @@ line_buffer::load_next_line(file_range prev_line)
                 lf -= 1;
             }
             retval.li_utf8_scan_result = scan_res;
+            if (!scan_res.is_valid()) {
+                log_warning("line is not utf8 -- %lld",
+                            retval.li_file_range.fr_offset);
+            }
         }
 
         auto got_new_data = old_retval_size != retval.li_file_range.fr_size;
@@ -1260,7 +1312,7 @@ line_buffer::load_next_line(file_range prev_line)
         }
     }
 
-    ensure(retval.li_file_range.fr_size <= this->lb_buffer.size());
+    ensure(retval.li_file_range.fr_size <= (ssize_t) this->lb_buffer.size());
     ensure(this->invariant());
 #if 0
     log_debug("got line part %d %d",

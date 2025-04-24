@@ -262,6 +262,7 @@ main(int argc, char** argv)
     argv += optind;
 
     if (argc > 0) {
+        log_debug("reading file: %s", argv[0]);
         auto read_res = lnav::filesystem::read_file(argv[0]);
         if (read_res.isErr()) {
             fprintf(stderr,
@@ -303,7 +304,7 @@ main(int argc, char** argv)
 
         auto nco = notcurses_options{};
         nco.flags |= NCOPTION_SUPPRESS_BANNERS;
-        nco.loglevel = NCLOGLEVEL_INFO;
+        nco.loglevel = NCLOGLEVEL_PANIC;
         auto sc = screen_curses::create(nco).unwrap();
         view_colors::singleton().init(sc.get_notcurses());
         auto looping = true;
@@ -419,10 +420,12 @@ main(int argc, char** argv)
         mouse_i.set_behavior(&db);
         mouse_i.set_enabled(sc.get_notcurses(), true);
 
+        tc.focus();
         while (looping) {
-            tc.do_update();
-            log_debug("doing render");
-            notcurses_render(sc.get_notcurses());
+            if (tc.do_update()) {
+                log_debug("doing render");
+                notcurses_render(sc.get_notcurses());
+            }
             tc.focus();
 
             log_debug("waiting for input");
@@ -441,7 +444,7 @@ main(int argc, char** argv)
                 tc.set_needs_update();
             } else if (ncinput_mouse_p(&nci)) {
                 mouse_i.handle_mouse(sc.get_notcurses(), nci);
-            } else if (nci.evtype == NCTYPE_PRESS) {
+            } else if (nci.evtype == NCTYPE_RELEASE) {
             } else if (!ncinput_lock_p(&nci) && !ncinput_modifier_p(&nci)) {
                 log_debug("handling key %x", nci.id);
                 tc.handle_key(nci);

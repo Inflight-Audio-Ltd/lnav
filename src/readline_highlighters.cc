@@ -88,7 +88,7 @@ find_matching_bracket(
     }
 
     if (line[x] == left && is_bracket(line, x, is_lit)) {
-        for (size_t lpc = x + 1; lpc < sub.lr_end; lpc++) {
+        for (auto lpc = x + 1; lpc < sub.lr_end; lpc++) {
             if (line[lpc] == left && is_bracket(line, lpc, is_lit)) {
                 depth += 1;
             } else if (line[lpc] == right && is_bracket(line, lpc, is_lit)) {
@@ -111,7 +111,7 @@ find_matching_bracket(
 
     depth = 0;
 
-    for (size_t lpc = sub.lr_start; lpc < sub.lr_end; lpc++) {
+    for (auto lpc = sub.lr_start; lpc < sub.lr_end; lpc++) {
         if (line[lpc] == left && is_bracket(line, lpc, is_lit)) {
             depth += 1;
             if (!first_left) {
@@ -170,7 +170,7 @@ readline_command_highlighter_int(attr_line_t& al,
     static const auto SH_PREFIXES = lnav::pcre2pp::code::from_const(
         "^:(eval|open|append-to|write-to|write-csv-to|write-json-to)");
     static const auto SQL_PREFIXES
-    = lnav::pcre2pp::code::from_const("^:(filter-expr|mark-expr)");
+        = lnav::pcre2pp::code::from_const("^:(filter-expr|mark-expr)");
     static const auto MD_PREFIXES
         = lnav::pcre2pp::code::from_const("^:comment");
     static const auto IDENT_PREFIXES
@@ -189,8 +189,10 @@ readline_command_highlighter_int(attr_line_t& al,
     ws_index = line.find(' ', sub.lr_start);
     auto command = line.substr(sub.lr_start, ws_index);
     if (ws_index != std::string::npos) {
-        alb.overlay_attr(line_range(sub.lr_start + 1, ws_index),
-                         VC_ROLE.value(role_t::VCR_KEYWORD));
+        auto has_prefix = al.al_string[sub.lr_start] == ':';
+        alb.overlay_attr(
+            line_range(sub.lr_start + (has_prefix ? 1 : 0), ws_index),
+            VC_ROLE.value(role_t::VCR_KEYWORD));
 
         if (RE_PREFIXES.find_in(in_frag).ignore_error()) {
             lnav::snippets::regex_highlighter(
@@ -222,7 +224,7 @@ readline_command_highlighter_int(attr_line_t& al,
     if (IDENT_PREFIXES.find_in(in_frag).ignore_error()
         && ws_index != std::string::npos)
     {
-        size_t start = ws_index, last;
+        ssize_t start = ws_index, last;
 
         do {
             for (; start < sub.length() && isspace(line[start]); start++)
@@ -286,7 +288,7 @@ readline_sqlite_highlighter_int(attr_line_t& al,
     annotate_sql_statement(anno_sql);
 
     for (const auto& attr : anno_sql.al_attrs) {
-        line_range lr{
+        auto lr = line_range{
             sub.lr_start + attr.sa_range.lr_start,
             sub.lr_start + attr.sa_range.lr_end,
         };
@@ -297,10 +299,11 @@ readline_sqlite_highlighter_int(attr_line_t& al,
         {
             alb.overlay_attr(lr, VC_ROLE.value(role_t::VCR_KEYWORD));
         } else if (attr.sa_type == &SQL_IDENTIFIER_ATTR
-                   || attr.sa_type == &lnav::sql::PRQL_IDENTIFIER_ATTR)
+                   || attr.sa_type == &lnav::sql::PRQL_FQID_ATTR)
         {
-            if (x && !attr.sa_range.contains(x.value())
-                && attr.sa_range.lr_end != x.value())
+            if (!x
+                || (x && !attr.sa_range.contains(x.value())
+                    && attr.sa_range.lr_end != x.value()))
             {
                 alb.overlay_attr(lr, VC_ROLE.value(role_t::VCR_IDENTIFIER));
             }
@@ -312,6 +315,15 @@ readline_sqlite_highlighter_int(attr_line_t& al,
                    || attr.sa_type == &lnav::sql::PRQL_NUMBER_ATTR)
         {
             alb.overlay_attr(lr, VC_ROLE.value(role_t::VCR_NUMBER));
+        } else if (attr.sa_type == &SQL_HEX_LIT_ATTR) {
+            if (lr.length() > 1 && al.al_string[lr.lr_end - 1] == '\'') {
+                alb.overlay_attr(lr, VC_ROLE.value(role_t::VCR_STRING));
+            } else {
+                alb.overlay_attr_for_char(
+                    lr.lr_start, VC_STYLE.value(text_attrs::with_reverse()));
+                alb.overlay_attr_for_char(lr.lr_start,
+                                          VC_ROLE.value(role_t::VCR_ERROR));
+            }
         } else if (attr.sa_type == &SQL_STRING_ATTR) {
             if (lr.length() > 1 && al.al_string[lr.lr_end - 1] == '\'') {
                 alb.overlay_attr(lr, VC_ROLE.value(role_t::VCR_STRING));
@@ -544,23 +556,23 @@ readline_lnav_highlighter(attr_line_t& al, std::optional<int> x)
 }
 
 void
-highlight_syntax(text_format_t tf, attr_line_t& al)
+highlight_syntax(text_format_t tf, attr_line_t& al, std::optional<int> x)
 {
     switch (tf) {
         case text_format_t::TF_SQL: {
-            readline_sqlite_highlighter(al, std::nullopt);
+            readline_sqlite_highlighter(al, x);
             break;
         }
         case text_format_t::TF_PCRE: {
-            readline_regex_highlighter(al, std::nullopt);
+            readline_regex_highlighter(al, x);
             break;
         }
         case text_format_t::TF_SHELL_SCRIPT: {
-            readline_shlex_highlighter(al, std::nullopt);
+            readline_shlex_highlighter(al, x);
             break;
         }
         case text_format_t::TF_LNAV_SCRIPT: {
-            readline_lnav_highlighter(al, std::nullopt);
+            readline_lnav_highlighter(al, x);
             break;
         }
         default:

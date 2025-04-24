@@ -290,9 +290,7 @@ std::multimap<std::string, const help_text*> sqlite_function_help;
 static int
 handle_db_list(void* ptr, int ncols, char** colvalues, char** colnames)
 {
-    struct sqlite_metadata_callbacks* smc;
-
-    smc = (struct sqlite_metadata_callbacks*) ptr;
+    auto* smc = (struct sqlite_metadata_callbacks*) ptr;
 
     smc->smc_db_list[colvalues[1]] = std::vector<std::string>();
     if (!smc->smc_database_list) {
@@ -303,14 +301,14 @@ handle_db_list(void* ptr, int ncols, char** colvalues, char** colnames)
 }
 
 struct table_list_data {
-    struct sqlite_metadata_callbacks* tld_callbacks;
+    sqlite_metadata_callbacks* tld_callbacks;
     db_table_map_t::iterator* tld_iter;
 };
 
 static int
 handle_table_list(void* ptr, int ncols, char** colvalues, char** colnames)
 {
-    struct table_list_data* tld = (struct table_list_data*) ptr;
+    auto* tld = (struct table_list_data*) ptr;
 
     (*tld->tld_iter)->second.emplace_back(colvalues[0]);
     if (!tld->tld_callbacks->smc_table_list) {
@@ -349,7 +347,7 @@ walk_sqlite_metadata(sqlite3* db, sqlite_metadata_callbacks& smc)
     for (auto iter = smc.smc_db_list.begin(); iter != smc.smc_db_list.end();
          ++iter)
     {
-        struct table_list_data tld = {&smc, &iter};
+        table_list_data tld = {&smc, &iter};
         auto_mem<char, sqlite3_free> query;
 
         query = sqlite3_mprintf(
@@ -368,11 +366,11 @@ walk_sqlite_metadata(sqlite3* db, sqlite_metadata_callbacks& smc)
              ++table_iter)
         {
             auto_mem<char, sqlite3_free> table_query;
-            std::string& table_name = *table_iter;
+            smc.smc_table_name = *table_iter;
 
             table_query = sqlite3_mprintf("pragma %Q.table_xinfo(%Q)",
                                           iter->first.c_str(),
-                                          table_name.c_str());
+                                          smc.smc_table_name.c_str());
             if (table_query == nullptr) {
                 return SQLITE_NOMEM;
             }
@@ -388,7 +386,7 @@ walk_sqlite_metadata(sqlite3* db, sqlite_metadata_callbacks& smc)
 
             table_query = sqlite3_mprintf("pragma %Q.foreign_key_list(%Q)",
                                           iter->first.c_str(),
-                                          table_name.c_str());
+                                          smc.smc_table_name.c_str());
             if (table_query == nullptr) {
                 return SQLITE_NOMEM;
             }
@@ -420,8 +418,8 @@ schema_collation_list(void* ptr, int ncols, char** colvalues, char** colnames)
 static int
 schema_db_list(void* ptr, int ncols, char** colvalues, char** colnames)
 {
-    struct sqlite_metadata_callbacks* smc = (sqlite_metadata_callbacks*) ptr;
-    std::string& schema_out = *((std::string*) smc->smc_userdata);
+    auto smc = (sqlite_metadata_callbacks*) ptr;
+    auto& schema_out = *((std::string*) smc->smc_userdata);
     auto_mem<char, sqlite3_free> attach_sql;
 
     attach_sql = sqlite3_mprintf(
@@ -435,8 +433,8 @@ schema_db_list(void* ptr, int ncols, char** colvalues, char** colnames)
 static int
 schema_table_list(void* ptr, int ncols, char** colvalues, char** colnames)
 {
-    struct sqlite_metadata_callbacks* smc = (sqlite_metadata_callbacks*) ptr;
-    std::string& schema_out = *((std::string*) smc->smc_userdata);
+    auto smc = (sqlite_metadata_callbacks*) ptr;
+    auto& schema_out = *((std::string*) smc->smc_userdata);
     auto_mem<char, sqlite3_free> create_sql;
 
     create_sql = sqlite3_mprintf("%s;\n", colvalues[1]);
@@ -461,7 +459,7 @@ schema_foreign_key_list(void* ptr, int ncols, char** colvalues, char** colnames)
 void
 dump_sqlite_schema(sqlite3* db, std::string& schema_out)
 {
-    struct sqlite_metadata_callbacks schema_sql_meta_callbacks = {
+    sqlite_metadata_callbacks schema_sql_meta_callbacks = {
         schema_collation_list,
         schema_db_list,
         schema_table_list,
@@ -858,22 +856,31 @@ sql_execute_script(sqlite3* db,
     sql_compile_script(db, global_vars, src_name, script, errors);
 }
 
-static struct {
+static const struct {
     int sqlite_type;
     const char* collator;
     const char* sample;
 } TYPE_TEST_VALUE[] = {
     {SQLITE3_TEXT, "", "foobar"},
-    {SQLITE_INTEGER, "", "123"},
     {SQLITE_FLOAT, "", "123.0"},
+    {SQLITE_INTEGER, "", "123"},
     {SQLITE_TEXT, "ipaddress", "127.0.0.1"},
+    {SQLITE_TEXT, "measure_with_units", "123ms"},
+    {SQLITE_TEXT, "measure_with_units", "123 ms"},
+    {SQLITE_TEXT, "measure_with_units", "123KB"},
+    {SQLITE_TEXT, "measure_with_units", "123 KB"},
+    {SQLITE_TEXT, "measure_with_units", "123Kbps"},
+    {SQLITE_TEXT, "measure_with_units", "123.0 Kbps"},
+    {SQLITE_TEXT, "measure_with_units", "123.0KB"},
+    {SQLITE_TEXT, "measure_with_units", "123.0 KB"},
+    {SQLITE_TEXT, "measure_with_units", "123.0Kbps"},
+    {SQLITE_TEXT, "measure_with_units", "123.0 Kbps"},
 };
 
 int
 guess_type_from_pcre(const std::string& pattern, std::string& collator)
 {
-    static const std::vector<int> number_matches = {1, 2};
-
+    log_info("guessing SQL type from pattern: %s", pattern.c_str());
     auto compile_res = lnav::pcre2pp::code::from(pattern);
     if (compile_res.isErr()) {
         return SQLITE3_TEXT;
@@ -886,14 +893,22 @@ guess_type_from_pcre(const std::string& pattern, std::string& collator)
 
     collator.clear();
     for (const auto& test_value : TYPE_TEST_VALUE) {
-        auto find_res
+        log_info("  testing sample: %s", test_value.sample);
+        const auto find_res
             = re.find_in(string_fragment::from_c_str(test_value.sample),
                          PCRE2_ANCHORED)
                   .ignore_error();
         if (find_res && find_res->f_all.sf_begin == 0
             && find_res->f_remaining.empty())
         {
+            log_info("    matched!");
             matches.push_back(index);
+            break;
+        }
+        if (!find_res) {
+            log_info("    mismatch");
+        } else if (!find_res->f_remaining.empty()) {
+            log_info("    incomplete match");
         }
 
         index += 1;
@@ -902,9 +917,6 @@ guess_type_from_pcre(const std::string& pattern, std::string& collator)
     if (matches.size() == 1) {
         retval = TYPE_TEST_VALUE[matches.front()].sqlite_type;
         collator = TYPE_TEST_VALUE[matches.front()].collator;
-    } else if (matches == number_matches) {
-        retval = SQLITE_FLOAT;
-        collator = "";
     }
 
     return retval;
@@ -926,7 +938,7 @@ sqlite3_type_to_string(int type)
             return "BLOB";
     }
 
-    ensure("Invalid sqlite type");
+    ensure(!!!"Invalid sqlite type");
 
     return nullptr;
 }
@@ -994,8 +1006,9 @@ sql_keyword_re()
 constexpr string_attr_type<void> SQL_COMMAND_ATTR("sql_command");
 constexpr string_attr_type<void> SQL_KEYWORD_ATTR("sql_keyword");
 constexpr string_attr_type<void> SQL_IDENTIFIER_ATTR("sql_ident");
-constexpr string_attr_type<void> SQL_FUNCTION_ATTR("sql_func");
+constexpr string_attr_type<std::string> SQL_FUNCTION_ATTR("sql_func");
 constexpr string_attr_type<void> SQL_STRING_ATTR("sql_string");
+constexpr string_attr_type<void> SQL_HEX_LIT_ATTR("sql_hex_lit");
 constexpr string_attr_type<void> SQL_NUMBER_ATTR("sql_number");
 constexpr string_attr_type<void> SQL_OPERATOR_ATTR("sql_oper");
 constexpr string_attr_type<void> SQL_PAREN_ATTR("sql_paren");
@@ -1025,6 +1038,11 @@ annotate_sql_statement(attr_line_t& al)
             &SQL_KEYWORD_ATTR,
         },
         {
+            lnav::pcre2pp::code::from_const(
+                R"(\A(?:x|X)'(?:(?:[0-9a-fA-F]{2})+'|[0-9a-fA-F]*$))"),
+            &SQL_HEX_LIT_ATTR,
+        },
+        {
             lnav::pcre2pp::code::from_const(R"(\A'[^']*('(?:'[^']*')*|$))"),
             &SQL_STRING_ATTR,
         },
@@ -1034,7 +1052,7 @@ annotate_sql_statement(attr_line_t& al)
         },
         {
             lnav::pcre2pp::code::from_const(
-                R"(\A-?\d+(?:\.\d+)?(?:[eE][\-\+]?\d+)?)"),
+                R"(\A-?\d+(?:\.\d+)?(?:[eE][\-\+]?\d+)?\b)"),
             &SQL_NUMBER_ATTR,
         },
         {
@@ -1051,6 +1069,10 @@ annotate_sql_statement(attr_line_t& al)
             lnav::pcre2pp::code::from_const(
                 R"(\A(\*|\->{1,2}|<|>|=|!|\-|\+|\|\|))"),
             &SQL_OPERATOR_ATTR,
+        },
+        {
+            lnav::pcre2pp::code::from_const(R"(\A[0-9][a-zA-Z0-9\-\._]+)"),
+            &SQL_GARBAGE_ATTR,
         },
         {
             lnav::pcre2pp::code::from_const(R"(\A.)"),
@@ -1104,22 +1126,10 @@ annotate_sql_statement(attr_line_t& al)
            != sa.end())
     {
         string_attrs_t::const_iterator piter;
-        bool found_open = false;
-        ssize_t lpc;
 
         start = iter->sa_range.lr_end;
-        for (lpc = iter->sa_range.lr_end; lpc < (int) line.length(); lpc++) {
-            if (line[lpc] == '(') {
-                found_open = true;
-                break;
-            }
-            if (!isspace(line[lpc])) {
-                break;
-            }
-        }
-
-        if (found_open) {
-            ssize_t pstart = lpc + 1;
+        if (start < (ssize_t) line.length() && line[start] == '(') {
+            ssize_t pstart = start + 1;
             int depth = 1;
 
             while (depth > 0
@@ -1138,13 +1148,16 @@ annotate_sql_statement(attr_line_t& al)
             if (piter == sa.end()) {
                 func_range.lr_end = line.length();
             } else {
-                func_range.lr_end = piter->sa_range.lr_end - 1;
+                func_range.lr_end = piter->sa_range.lr_end;
             }
-            sa.emplace_back(func_range, SQL_FUNCTION_ATTR.value());
+            auto func_name = al.to_string_fragment(iter);
+            sa.emplace_back(
+                func_range,
+                SQL_FUNCTION_ATTR.value(tolower(func_name.to_string())));
         }
     }
 
-    remove_string_attr(sa, &SQL_PAREN_ATTR);
+    // remove_string_attr(sa, &SQL_PAREN_ATTR);
     stable_sort(sa.begin(), sa.end());
 }
 
@@ -1209,9 +1222,8 @@ find_sql_help_for_line(const attr_line_t& al, size_t x)
             return false;
         }
 
-        const std::string& str = al.get_string();
-        const line_range& lr = sa.sa_range;
-        int lpc;
+        const auto& str = al.get_string();
+        const auto& lr = sa.sa_range;
 
         if (sa.sa_type == &SQL_FUNCTION_ATTR) {
             if (!sa.sa_range.contains(x)) {
@@ -1219,7 +1231,8 @@ find_sql_help_for_line(const attr_line_t& al, size_t x)
             }
         }
 
-        for (lpc = lr.lr_start; lpc < lr.lr_end; lpc++) {
+        auto lpc = lr.lr_start;
+        for (; lpc < lr.lr_end; lpc++) {
             if (!isalnum(str[lpc]) && str[lpc] != '_') {
                 break;
             }
@@ -1431,7 +1444,7 @@ annotate_prql_statement(attr_line_t& al)
             &PRQL_OPERATOR_ATTR,
         },
         {
-            lnav::pcre2pp::code::from_const(R"(\A\|)"),
+            lnav::pcre2pp::code::from_const(R"(\A(?:\||\n))"),
             &PRQL_PIPE_ATTR,
         },
         {
@@ -1444,7 +1457,8 @@ annotate_prql_statement(attr_line_t& al)
         },
     };
 
-    static const auto ws_pattern = lnav::pcre2pp::code::from_const(R"(\A\s+)");
+    static const auto ws_pattern
+        = lnav::pcre2pp::code::from_const(R"(\A[ \t\r]+)");
 
     const auto& line = al.get_string();
     auto& sa = al.get_attrs();
@@ -1460,6 +1474,11 @@ annotate_prql_statement(attr_line_t& al)
             if (pat_find_res) {
                 sa.emplace_back(to_line_range(pat_find_res->f_all),
                                 pat.type->value());
+                if (sa.back().sa_type == &PRQL_PIPE_ATTR
+                    && pat_find_res->f_all == "\n"_frag)
+                {
+                    sa.back().sa_range.lr_start += 1;
+                }
                 remaining = pat_find_res->f_remaining;
                 break;
             }
@@ -1470,11 +1489,15 @@ annotate_prql_statement(attr_line_t& al)
     std::vector<std::pair<char, int>> groups;
     std::vector<line_range> fqids;
     std::optional<line_range> id_start;
+    const string_attr_type_base* last_attr_type = nullptr;
     bool saw_id_dot = false;
     for (const auto& attr : sa) {
-        if (groups.empty() && attr.sa_type == &PRQL_PIPE_ATTR) {
+        if (groups.empty() && attr.sa_type == &PRQL_PIPE_ATTR
+            && last_attr_type != &PRQL_PIPE_ATTR)
+        {
             stages.push_back(attr.sa_range.lr_start);
         }
+        last_attr_type = attr.sa_type;
         if (!id_start) {
             if (attr.sa_type == &PRQL_IDENTIFIER_ATTR) {
                 id_start = attr.sa_range;
@@ -1546,6 +1569,8 @@ annotate_prql_statement(attr_line_t& al)
     for (const auto& fqid_range : fqids) {
         sa.emplace_back(fqid_range, PRQL_FQID_ATTR.value());
     }
+    remove_string_attr(sa, &PRQL_IDENTIFIER_ATTR);
+    remove_string_attr(sa, &PRQL_DOT_ATTR);
 
     stable_sort(sa.begin(), sa.end());
 }

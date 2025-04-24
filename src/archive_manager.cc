@@ -78,8 +78,8 @@ Result<describe_result, std::string>
 describe(const fs::path& filename)
 {
 #if HAVE_ARCHIVE_H
-    static constexpr auto RAW_FORMAT_NAME = string_fragment::from_const("raw");
-    static constexpr auto GZ_FILTER_NAME = string_fragment::from_const("gzip");
+    static constexpr auto RAW_FORMAT_NAME = "raw"_frag;
+    static constexpr auto GZ_FILTER_NAME = "gzip"_frag;
 
     auto_mem<archive> arc(archive_read_free);
 
@@ -318,7 +318,8 @@ extract(const std::string& filename, const extract_cb& cb)
 
         auto_mem<archive_entry> wentry(archive_entry_free);
         wentry = archive_entry_clone(entry);
-        auto desired_pathname = fs::path(archive_entry_pathname(entry));
+        auto desired_pathname
+            = fs::path(archive_entry_pathname(entry)).relative_path();
         if (strcmp(format_name, "raw") == 0 && filter_count >= 2) {
             desired_pathname = fs::path(filename).filename();
         }

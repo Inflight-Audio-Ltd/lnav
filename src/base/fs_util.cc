@@ -27,7 +27,9 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <filesystem>
 #include <fstream>
+#include <utility>
 
 #include "fs_util.hh"
 
@@ -39,6 +41,8 @@
 #include "itertools.hh"
 #include "lnav_log.hh"
 #include "opt_util.hh"
+#include "scn/scan.h"
+#include "short_alloc.h"
 
 #ifdef HAVE_LIBPROC_H
 #    include <libproc.h>
@@ -100,7 +104,7 @@ self_mtime()
 }
 
 std::string
-escape_path(const std::filesystem::path& p)
+escape_path(const std::filesystem::path& p, path_type pt)
 {
     auto p_str = p.string();
     std::string retval;
@@ -116,17 +120,55 @@ escape_path(const std::filesystem::path& p)
             case '>':
             case '\'':
             case '"':
+                retval.push_back('\\');
+                break;
             case '*':
             case '[':
             case ']':
             case '?':
-                retval.push_back('\\');
+                switch (pt) {
+                    case path_type::normal:
+                        retval.push_back('\\');
+                        break;
+                    case path_type::pattern:
+                        break;
+                }
+                break;
+            default:
                 break;
         }
         retval.push_back(ch);
     }
 
     return retval;
+}
+
+std::pair<std::string, file_location_t>
+split_file_location(const std::string& file_path_str)
+{
+    auto hash_index = file_path_str.rfind('#');
+    if (hash_index != std::string::npos) {
+        return std::make_pair(file_path_str.substr(0, hash_index),
+                              file_path_str.substr(hash_index));
+    }
+
+    auto colon_index = file_path_str.rfind(':');
+    if (colon_index != std::string::npos) {
+        auto top_range
+            = std::string_view{&file_path_str[colon_index + 1],
+                               file_path_str.size() - colon_index - 1};
+        auto scan_res = scn::scan_value<int>(top_range);
+
+        if (scan_res && scan_res->range().empty()) {
+            return std::make_pair(file_path_str.substr(0, colon_index),
+                                  scan_res->value());
+        }
+        log_info("did not parse line number from file path with colon: %s",
+                 file_path_str.c_str());
+    }
+
+    return std::make_pair(file_path_str,
+                          file_location_t{mapbox::util::no_init{}});
 }
 
 Result<std::filesystem::path, std::string>
@@ -174,7 +216,8 @@ Result<std::pair<std::filesystem::path, auto_fd>, std::string>
 open_temp_file(const std::filesystem::path& pattern)
 {
     auto pattern_str = pattern.string();
-    char pattern_copy[pattern_str.size() + 1];
+    stack_buf allocator;
+    auto* pattern_copy = allocator.allocate(pattern_str.size() + 1);
     int fd;
 
     strcpy(pattern_copy, pattern_str.c_str());

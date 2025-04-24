@@ -527,7 +527,7 @@ string_fragment::byte_to_column_index(const size_t byte_index) const
     auto index = this->sf_begin;
     size_t curr_col = 0;
 
-    while (index < this->sf_end && index < byte_index) {
+    while (index < this->sf_end && index < (ssize_t) byte_index) {
         auto read_res = ww898::utf::utf8::read(
             [this, &index]() { return this->sf_string[index++]; });
         if (read_res.isErr()) {
@@ -560,7 +560,7 @@ string_fragment::byte_to_column_index(const size_t byte_index) const
 static bool
 iswordbreak(wchar_t wchar)
 {
-    const uint32_t mask
+    static constexpr uint32_t mask
         = UC_CATEGORY_MASK_L | UC_CATEGORY_MASK_N | UC_CATEGORY_MASK_Pc;
     return !uc_is_general_category_withtable(wchar, mask);
 }
@@ -569,7 +569,7 @@ std::optional<int>
 string_fragment::next_word(const int start_col) const
 {
     auto index = this->sf_begin;
-    size_t curr_col = 0;
+    int curr_col = 0;
     auto in_word = false;
 
     while (index < this->sf_end) {
@@ -617,7 +617,7 @@ std::optional<int>
 string_fragment::prev_word(const int start_col) const
 {
     auto index = this->sf_begin;
-    size_t curr_col = 0;
+    int curr_col = 0;
     auto in_word = false;
     std::optional<int> last_word_col;
 

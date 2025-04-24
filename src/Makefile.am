@@ -127,11 +127,13 @@ if HAVE_CARGO
 RUST_DEPS_CPPFLAGS = -DHAVE_RUST_DEPS=1
 PRQLC_DIR = third-party/prqlc-c/target
 RUST_DEPS_LIBS = $(PRQLC_DIR)/release/libprqlc_c.a
+RUST_DEPS_TRIGGER = $(PRQLC_DIR)/release/libprqlc_c.a.dep
 
 $(RUST_DEPS_LIBS): $(srcdir)/third-party/prqlc-c/src/lib.rs $(srcdir)/third-party/prqlc-c/Cargo.toml
 	mkdir -p $(PRQLC_DIR)
 	env CARGO_TARGET_DIR=third-party/prqlc-c/target $(CARGO_CMD) build --manifest-path \
 	    $(srcdir)/third-party/prqlc-c/Cargo.toml --package prqlc-c --release
+	touch $(RUST_DEPS_LIBS)
 
 else
 RUST_DEPS =
@@ -155,6 +157,7 @@ AM_CPPFLAGS = \
 	-I$(srcdir)/third-party/notcurses/include \
 	-I$(srcdir)/third-party/prqlc-c \
 	-I$(srcdir)/third-party/rapidyaml \
+	-I$(srcdir)/third-party/hat-trie/include \
 	-I$(top_srcdir)/src/third-party/scnlib/include \
 	-Wall \
 	$(CODE_COVERAGE_CPPFLAGS) \
@@ -193,7 +196,6 @@ LDADD = \
 # css-color-names.json is from https://github.com/bahamas10/css-color-names/blob/master/css-color-names.json
 
 dist_noinst_DATA = \
-	alpha-release.sh \
 	animals.json \
 	ansi-palette.json \
 	css-color-names.json \
@@ -240,6 +242,8 @@ noinst_HEADERS = \
 	dump_internals.hh \
 	elem_to_json.hh \
 	environ_vtab.hh \
+	external_editor.hh \
+	external_editor.cfg.hh \
 	external_opener.hh \
 	external_opener.cfg.hh \
 	field_overlay_source.hh \
@@ -252,13 +256,12 @@ noinst_HEADERS = \
 	filter_observer.hh \
 	filter_status_source.hh \
 	filter_sub_source.hh \
+	format.scripts.hh \
 	fstat_vtab.hh \
-	fts_fuzzy_match.hh \
 	grep_highlighter.hh \
 	grep_proc.hh \
 	hasher.hh \
 	help.md \
-	help.txt \
 	help_text.hh \
 	help_text_formatter.hh \
 	highlighter.hh \
@@ -276,6 +279,7 @@ noinst_HEADERS = \
 	lnav.indexing.hh \
 	lnav.management_cli.hh \
     lnav.prompt.hh \
+    lnav.script.parser.hh \
 	lnav_commands.hh \
 	lnav_config.hh \
 	lnav_config_fwd.hh \
@@ -307,6 +311,7 @@ noinst_HEADERS = \
 	mapbox/variant_visitor.hpp \
 	md2attr_line.hh \
 	md4cpp.hh \
+	msg.text.hh \
 	piper.header.hh \
 	piper.looper.hh \
 	piper.looper.cfg.hh \
@@ -338,6 +343,7 @@ noinst_HEADERS = \
 	spectro_source.hh \
 	sqlitepp.hh \
 	sqlitepp.client.hh \
+	sql.formatter.hh \
 	sql_execute.hh \
 	sql_help.hh \
 	sql_util.hh \
@@ -415,7 +421,13 @@ THIRD_PARTY_SRCS = \
     third-party/prqlc-c/prqlc.cxx.cc \
     third-party/robin_hood/robin_hood.h \
 	third-party/sqlite/ext/dbdump.c \
-	third-party/sqlite/ext/series.c
+	third-party/sqlite/ext/series.c \
+    third-party/tlx/die/core.hpp \
+    third-party/tlx/container/btree.hpp \
+    third-party/tlx/container/btree_map.hpp \
+    third-party/tlx/container/btree_multimap.hpp \
+    third-party/tlx/container/btree_multiset.hpp \
+    third-party/tlx/container/btree_set.hpp
 
 libdatascanner_a_SOURCES = \
 	data_scanner.cc \
@@ -445,6 +457,7 @@ libdiag_a_SOURCES = \
 	elem_to_json.cc \
 	environ_vtab.cc \
 	extension-functions.cc \
+	external_editor.cc \
 	external_opener.cc \
 	field_overlay_source.cc \
 	file_collection.cc \
@@ -457,7 +470,6 @@ libdiag_a_SOURCES = \
 	filter_sub_source.cc \
 	fstat_vtab.cc \
     fs-extension-functions.cc \
-    fts_fuzzy_match.cc \
 	grep_proc.cc \
 	help_text.cc \
 	help_text_formatter.cc \
@@ -469,6 +481,7 @@ libdiag_a_SOURCES = \
 	line_buffer.cc \
 	listview_curses.cc \
 	lnav.prompt.cc \
+	lnav.script.parser.cc \
 	lnav_commands.cc \
 	lnav_config.cc \
 	lnav_util.cc \
@@ -487,6 +500,7 @@ libdiag_a_SOURCES = \
 	logfile_sub_source.cc \
 	md2attr_line.cc \
 	md4cpp.cc \
+	msg.text.cc \
 	network-extension-functions.cc \
 	data_parser.cc \
 	piper.header.cc \
@@ -495,6 +509,7 @@ libdiag_a_SOURCES = \
 	plain_text_source.cc \
 	pollable.cc \
 	pretty_printer.cc \
+	preview_status_source.cc \
 	ptimec_rt.cc \
 	readline_callbacks.cc \
 	readline_highlighters.cc \
@@ -521,6 +536,7 @@ libdiag_a_SOURCES = \
 	text_overlay_menu.cc \
 	textfile_sub_source.cc \
 	timer.cc \
+	sql.formatter.cc \
 	sql_commands.cc \
 	sql_util.cc \
 	state-extension-functions.cc \
@@ -632,6 +648,3 @@ if HAVE_CHECK_JSONSCHEMA
 	$(CHECK_JSONSCHEMA) --schemafile $(top_srcdir)/docs/schemas/format-v1.schema.json $(FORMAT_FILES)
 	$(CHECK_JSONSCHEMA) --schemafile $(top_srcdir)/docs/schemas/config-v1.schema.json $(CONFIG_FILES)
 endif
-
-install-exec-hook:
-	bash $(srcdir)/alpha-release.sh

@@ -5,6 +5,9 @@ export YES_COLOR=1
 unset XDG_CONFIG_HOME
 
 run_cap_test ${lnav_test} -n \
+    ${test_dir}/textfile_broken_gz.txt.gz
+
+run_cap_test ${lnav_test} -n \
     -c ':goto 5' \
     -c ':filter-out Lorem|sed' \
     ${test_dir}/textfile_plain.0
@@ -42,6 +45,10 @@ run_cap_test ${lnav_test} -n \
     ${test_dir}/textfile_ansi_expanding.0
 
 run_cap_test ${lnav_test} -n \
+    ${test_dir}/textfile_0.md
+
+run_cap_test ${lnav_test} -n \
+    -c ':set-text-view-mode raw' \
     ${test_dir}/textfile_0.md
 
 run_cap_test ${lnav_test} -n \
@@ -149,3 +156,26 @@ run_cap_test ${lnav_test} -nN \
 
 run_cap_test ${lnav_test} -n \
     ${top_srcdir}/src/scripts/lnav-pop-view.lnav
+
+run_cap_test ${lnav_test} -n ${test_dir}/textfile_ctrl.0
+
+
+#####
+
+export HOME="./cfg/rotate-test-config"
+export XDG_CONFIG_HOME="./cfg/rotate-test-config/.config"
+rm -rf ./cfg/rotate-test-config
+mkdir -p $HOME/.config
+
+run_cap_test ${lnav_test} -nN -c ':config /tuning/piper/max-size 128'
+
+cat ${test_dir}/textfile_plain.0 | \
+  run_cap_test ${lnav_test} -n -d /tmp/lnav-text.err \
+    -c ';SELECT filepath FROM lnav_file ORDER BY filepath DESC'
+
+${lnav_test} -Nn -c ':config /tuning/textfile/max-unformatted-line-length 20'
+
+run_cap_test ${lnav_test} -n \
+    ${test_dir}/textfile_ansi.0
+
+#####

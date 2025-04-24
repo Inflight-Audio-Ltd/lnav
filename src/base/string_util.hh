@@ -37,6 +37,7 @@
 
 #include "auto_mem.hh"
 #include "intern_string.hh"
+#include "strnatcmp.h"
 #include "ww898/cp_utf8.hpp"
 
 void scrub_to_utf8(char* buffer, size_t length);
@@ -239,6 +240,35 @@ to_superscript(T in)
     return to_superscript(fmt::to_string(in));
 }
 
+struct strnatless {
+    bool operator()(const std::string& lhs, const std::string& rhs) const
+    {
+        return strnatcmp(lhs.size(), lhs.data(), rhs.size(), rhs.data()) < 0;
+    }
+
+    bool operator()(const string_fragment& lhs,
+                    const string_fragment& rhs) const
+    {
+        return strnatcmp(lhs.length(), lhs.data(), rhs.length(), rhs.data())
+            < 0;
+    }
+};
+
+struct strnatcaseless {
+    bool operator()(const std::string& lhs, const std::string& rhs) const
+    {
+        return strnatcasecmp(lhs.size(), lhs.data(), rhs.size(), rhs.data())
+            < 0;
+    }
+
+    bool operator()(const string_fragment& lhs,
+                    const string_fragment& rhs) const
+    {
+        return strnatcasecmp(lhs.length(), lhs.data(), rhs.length(), rhs.data())
+            < 0;
+    }
+};
+
 namespace lnav {
 class tainted_string {
 public:
@@ -291,5 +321,31 @@ enum class text_align_t {
     center,
     end,
 };
+
+inline string_fragment
+to_string_fragment(const auto_buffer& buf)
+{
+    return string_fragment::from_bytes(buf.begin(), buf.size());
+}
+
+inline bool
+operator==(const auto_buffer& buf, const string_fragment& sf)
+{
+    if ((int) buf.size() != sf.length()) {
+        return false;
+    }
+
+    return memcmp(buf.begin(), sf.data(), sf.length()) == 0;
+}
+
+inline bool
+operator==(const string_fragment& sf, const auto_buffer& buf)
+{
+    if ((int) buf.size() != sf.length()) {
+        return false;
+    }
+
+    return memcmp(buf.begin(), sf.data(), sf.length()) == 0;
+}
 
 #endif

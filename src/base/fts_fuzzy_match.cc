@@ -137,6 +137,15 @@ fuzzy_internal::fuzzy_match_recursive(const char* pattern,
             // Advance
             matches[nextMatch++] = (uint8_t) (str - strBegin);
             ++pattern;
+        } else {
+            if (*pattern == '\\') {
+                pattern += 1;
+                continue;
+            }
+            if (*str == '\\') {
+                str += 1;
+                continue;
+            }
         }
         ++str;
     }
@@ -200,7 +209,8 @@ fuzzy_internal::fuzzy_match_recursive(const char* pattern,
                     outScore += camel_bonus;
 
                 // Separator
-                bool neighborSeparator = neighbor == '_' || neighbor == ' ';
+                bool neighborSeparator = neighbor == '_' || neighbor == ' '
+                    || neighbor == '-';
                 if (neighborSeparator)
                     outScore += separator_bonus;
             } else {

@@ -808,6 +808,13 @@ check_output "able to select a continued line?" <<EOF
 EOF
 
 
+run_cap_test ${lnav_test} -n \
+    -c ":create-search-table est_size estimated size (?<size>\d+\.\d+ \w+)" \
+    -c ";SELECT log_line, size FROM est_size ORDER BY size DESC" \
+    -c ":write-csv-to -" \
+    ${test_dir}/logfile_spark.0
+
+
 run_test ${lnav_test} -n \
     -c ":create-search-table search_test1 (\w+), world!" \
     -c ";select col_0 from search_test1" \
@@ -951,4 +958,33 @@ run_cap_test ${lnav_test} -n \
 run_cap_test ${lnav_test} -n \
     -c ";SELECT * FROM access_log" \
     -c ":hide-fields bad" \
+    ${test_dir}/logfile_access_log.0
+
+run_cap_test ${lnav_test} -n \
+    -c ";SELECT log_line FROM vmw_log WHERE log_opid = '7e1280cf'" \
+    ${test_dir}/logfile_vpxd.0
+
+run_cap_test ${lnav_test} -n \
+    -c ";SELECT log_line_link FROM access_log WHERE log_line = 1" \
+    -c ';SELECT log_line FROM access_log WHERE log_line_link = $log_line_link' \
+    ${test_dir}/logfile_access_log.0
+
+run_cap_test ${lnav_test} -n \
+    -c ";SELECT log_line_link FROM access_log WHERE log_line = 1" \
+    -c ';SELECT log_line FROM access_log WHERE log_line_link > $log_line_link' \
+    ${test_dir}/logfile_access_log.0
+
+run_cap_test ${lnav_test} -n \
+    -c ";SELECT log_line_link FROM access_log WHERE log_line = 1" \
+    -c ':switch-to-view log' \
+    -c ':eval :goto $log_line_link' \
+    ${test_dir}/logfile_access_log.0
+
+run_cap_test ${lnav_test} -n \
+    -c ";SELECT * FROM lnav_focused_msg" \
+    ${test_dir}/logfile_access_log.0
+
+run_cap_test ${lnav_test} -n \
+    -c ";UPDATE lnav_focused_msg SET log_mark = 1" \
+    -c ":switch-to-view log" \
     ${test_dir}/logfile_access_log.0

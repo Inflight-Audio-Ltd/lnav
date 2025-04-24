@@ -62,8 +62,8 @@ using namespace lnav::roles::literals;
 
 #define PERFORM_MSG \
     "(Press " ANSI_BOLD("CTRL+X") " to perform operation and " ANSI_BOLD( \
-        "CTRL+]") " to abort)"
-#define ABORT_MSG "(Press " ANSI_BOLD("CTRL+]") " to abort)"
+        "Esc") " to abort)"
+#define ABORT_MSG "(Press " ANSI_BOLD("Esc") " to abort)"
 
 #define ANSI_RE(msg) \
     ANSI_CSI ANSI_BOLD_PARAM ";" ANSI_COLOR_PARAM(COLOR_CYAN) "m" msg ANSI_NORM
@@ -207,7 +207,7 @@ rl_sql_help(textinput_curses& rc)
 {
     auto al = attr_line_t(rc.get_content());
     const auto& sa = al.get_attrs();
-    size_t x = rc.tc_cursor.x;
+    auto x = rc.get_cursor_offset();
     bool has_doc = false;
 
     if (x > 0) {
@@ -263,11 +263,11 @@ rl_sql_help(textinput_curses& rc)
         sa, &SQL_IDENTIFIER_ATTR, al.nearest_text(x));
     if (ident_iter == sa.end()) {
         ident_iter = find_string_attr_containing(
-            sa, &lnav::sql::PRQL_IDENTIFIER_ATTR, al.nearest_text(x));
+            sa, &lnav::sql::PRQL_FQID_ATTR, al.nearest_text(x));
     }
     if (ident_iter != sa.end()) {
         auto ident = al.get_substring(ident_iter->sa_range);
-        auto intern_ident = intern_string::lookup(ident);
+        const intern_string_t intern_ident = intern_string::lookup(ident);
         auto vtab = lnav_data.ld_vtab_manager->lookup_impl(intern_ident);
         auto vtab_module_iter = vtab_module_ddls.find(intern_ident);
         std::string ddl;
@@ -288,12 +288,11 @@ rl_sql_help(textinput_curses& rc)
             lnav_data.ld_preview_view[0].set_sub_source(
                 &lnav_data.ld_preview_source[0]);
             lnav_data.ld_preview_view[0].set_overlay_source(nullptr);
-            lnav_data.ld_preview_source[0]
-                .replace_with(ddl)
-                .set_text_format(text_format_t::TF_SQL)
-                .truncate_to(30);
+            lnav_data.ld_preview_source[0].replace_with(ddl).set_text_format(
+                text_format_t::TF_SQL);
             lnav_data.ld_preview_status_source[0].get_description().set_value(
                 "Definition for table -- %s", ident.c_str());
+            lnav_data.ld_status[LNS_PREVIEW0].set_needs_update();
         }
     }
 
@@ -332,7 +331,7 @@ rl_cmd_change(textinput_curses& rc, bool is_req)
     } else if (args[0] != last_command) {
         last_command = args[0];
         generation = 0;
-    } else {
+    } else if (args.size() > 1) {
         generation += 1;
     }
 
@@ -365,43 +364,34 @@ rl_cmd_change(textinput_curses& rc, bool is_req)
         iter = lnav_commands.find(args[0]);
     }
     if (iter == lnav_commands.end()
-        || (args.size() == 1 && !endswith(line, " ")))
+        || (args.size() == 1 && !endswith(line, " ") && !endswith(line, "\n")))
     {
-        switch (rc.tc_popup_type) {
-            case textinput_curses::popup_type_t::history: {
-                rc.tc_on_history(rc);
-                break;
-            }
-            default: {
-                auto poss_str = lnav_commands | lnav::itertools::first()
-                    | lnav::itertools::similar_to(args.empty() ? "" : args[0],
-                                                  10);
-                auto poss_width = poss_str
-                    | lnav::itertools::map(&std::string::size)
-                    | lnav::itertools::max();
+        auto poss_str = lnav_commands | lnav::itertools::first()
+            | lnav::itertools::similar_to(args.empty() ? "" : args[0], 10);
+        auto poss_width = poss_str | lnav::itertools::map(&std::string::size)
+            | lnav::itertools::max();
 
-                auto poss
-                    = poss_str
-                    | lnav::itertools::map([&poss_width](const auto& x) {
-                          return attr_line_t()
-                              .append(x, VC_ROLE.value(role_t::VCR_KEYWORD))
-                              .append(" ")
-                              .pad_to(poss_width.value_or(0) + 1)
-                              .append(lnav_commands[x]->c_help.ht_summary)
-                              .with_attr_for_all(
-                                  lnav::prompt::SUBST_TEXT.value(x + " "));
-                      });
+        auto poss = poss_str
+            | lnav::itertools::map([&args, &poss_width](const auto& x) {
+                        return attr_line_t()
+                            .append(x, VC_ROLE.value(role_t::VCR_KEYWORD))
+                            .highlight_fuzzy_matches(cget(args, 0).value_or(""))
+                            .append(" ")
+                            .pad_to(poss_width.value_or(0) + 1)
+                            .append(lnav_commands[x]->c_help.ht_summary)
+                            .with_attr_for_all(
+                                lnav::prompt::SUBST_TEXT.value(x + " "));
+                    });
 
-                rc.open_popup_for_completion(0, poss);
-                rc.tc_popup.set_title("Command");
-                break;
-            }
-        }
-
+        rc.open_popup_for_completion(0, poss);
+        rc.tc_popup.set_title("Command");
+        prompt.p_editor.tc_height = std::min(
+            prompt.p_editor.tc_height, (int) prompt.p_editor.tc_lines.size());
         lnav_data.ld_doc_source.replace_with(CMD_HELP);
         lnav_data.ld_example_source.replace_with(CMD_EXAMPLE);
         lnav_data.ld_bottom_source.set_prompt(LNAV_CMD_PROMPT);
         lnav_data.ld_bottom_source.grep_error("");
+        lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
     } else if (args[0] == "config" && args.size() > 1) {
         static const auto INPUT_SRC = intern_string::lookup("input");
         yajlpp_parse_context ypc(INPUT_SRC, &lnav_config_handlers);
@@ -411,20 +401,18 @@ rl_cmd_change(textinput_curses& rc, bool is_req)
 
         if (ypc.ypc_current_handler != nullptr) {
             const json_path_handler_base* jph = ypc.ypc_current_handler;
-            char help_text[1024];
-
-            snprintf(help_text,
-                     sizeof(help_text),
-                     ANSI_BOLD("%s %s") " -- %s    " ABORT_MSG,
-                     jph->jph_property.c_str(),
-                     jph->jph_synopsis,
-                     jph->jph_description);
+            auto help_text = fmt::format(
+                FMT_STRING(ANSI_BOLD("{} {}") " -- {}    " ABORT_MSG),
+                jph->jph_property.c_str(),
+                jph->jph_synopsis,
+                jph->jph_description);
             lnav_data.ld_bottom_source.set_prompt(help_text);
             lnav_data.ld_bottom_source.grep_error("");
         } else {
             lnav_data.ld_bottom_source.grep_error(
                 "Unknown configuration option: " + args[1]);
         }
+        lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
     } else if ((args[0] != "filter-expr" && args[0] != "mark-expr")
                || !rl_sql_help(rc))
     {
@@ -448,52 +436,6 @@ rl_cmd_change(textinput_curses& rc, bool is_req)
             format_example_text_for_term(ht, eval_example, width, al);
             lnav_data.ld_example_source.replace_with(al);
             etc.set_needs_update();
-
-            switch (rc.tc_popup_type) {
-                case textinput_curses::popup_type_t::history: {
-                    rc.tc_on_history(rc);
-                    break;
-                }
-                default: {
-                    auto line_sf = string_fragment(line);
-                    auto args_sf
-                        = line_sf.split_when(string_fragment::tag1{' '}).second;
-                    auto parsed_cmd = lnav::command::parse_for_prompt(
-                        lnav_data.ld_exec_context,
-                        args_sf,
-                        iter->second->c_help);
-                    auto x = args_sf.column_to_byte_index(rc.tc_cursor.x
-                                                          - args_sf.sf_begin);
-                    auto arg_pair_opt = parsed_cmd.arg_at(x);
-
-                    if (arg_pair_opt) {
-                        auto arg_pair = arg_pair_opt.value();
-                        log_debug("apair %s [%d:%d) -- %s",
-                                  arg_pair.first->ht_name,
-                                  arg_pair.second.se_origin.sf_begin,
-                                  arg_pair.second.se_origin.sf_end,
-                                  arg_pair.second.se_value.c_str());
-                        if (is_req
-                            || (rc.tc_popup_type
-                                    == textinput_curses::popup_type_t::none
-                                && !arg_pair.first->is_trailing_arg()))
-                        {
-                            auto poss = prompt.get_cmd_parameter_completion(
-                                *tc, arg_pair.first, arg_pair.second.se_value);
-                            auto left = arg_pair.second.se_value.empty()
-                                ? rc.tc_cursor.x
-                                : line_sf.byte_to_column_index(
-                                      args_sf.sf_begin
-                                      + arg_pair.second.se_origin.sf_begin);
-                            rc.open_popup_for_completion(left, poss);
-                            rc.tc_popup.set_title(arg_pair.first->ht_name);
-                        }
-                    } else {
-                        log_info("no arg at %d", x);
-                    }
-                    break;
-                }
-            }
         }
 
         if (cmd.c_prompt != nullptr) {
@@ -503,8 +445,15 @@ rl_cmd_change(textinput_curses& rc, bool is_req)
             if (generation == 0 && trim(line) == args[0]
                 && !prompt_res.pr_new_prompt.empty())
             {
-                prompt.p_editor.set_content(prompt_res.pr_new_prompt);
+                log_debug("replacing prompt with one suggested by command");
+                prompt.p_editor.tc_selection
+                    = textinput_curses::selected_range::from_key(
+                        textinput_curses::input_point::home(),
+                        prompt.p_editor.tc_cursor);
+                prompt.p_editor.replace_selection(prompt_res.pr_new_prompt);
                 prompt.p_editor.move_cursor_to({(int) args[0].length() + 1, 0});
+                generation += 1;
+                iter = lnav_commands.end();
             }
             rc.tc_suggestion = prompt_res.pr_suggestion;
         }
@@ -513,8 +462,13 @@ rl_cmd_change(textinput_curses& rc, bool is_req)
             && ht.ht_parameters.front().ht_format
                 == help_parameter_format_t::HPF_MULTILINE_TEXT)
         {
-            prompt.p_editor.tc_height = 5;
-        } else {
+            if (prompt.p_editor.tc_height == 1) {
+                prompt.p_editor.set_height(5);
+            }
+        } else if (prompt.p_editor.tc_height > 1) {
+            auto ml_content = prompt.p_editor.get_content();
+            std::replace(ml_content.begin(), ml_content.end(), '\n', ' ');
+            prompt.p_editor.set_content(ml_content);
             prompt.p_editor.tc_height = 1;
         }
 
@@ -522,7 +476,489 @@ rl_cmd_change(textinput_curses& rc, bool is_req)
                                                   ? LNAV_MULTILINE_CMD_PROMPT
                                                   : LNAV_CMD_PROMPT);
         lnav_data.ld_bottom_source.grep_error("");
-        lnav_data.ld_status[LNS_BOTTOM].window_change();
+        lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
+    }
+
+    if (iter != lnav_commands.end() && (args.size() > 1 || endswith(line, " ")))
+    {
+        auto line_sf = string_fragment::from_str(line);
+        auto args_sf = line_sf.split_when(string_fragment::tag1{' '}).second;
+        auto parsed_cmd = lnav::command::parse_for_prompt(
+            lnav_data.ld_exec_context, args_sf, iter->second->c_help);
+        auto x
+            = args_sf.column_to_byte_index(rc.tc_cursor.x - args_sf.sf_begin);
+        auto arg_res_opt = parsed_cmd.arg_at(x);
+
+        if (arg_res_opt) {
+            auto arg_res = arg_res_opt.value();
+            log_debug("apair %s [%d:%d) -- %s",
+                      arg_res.aar_help->ht_name,
+                      arg_res.aar_element.se_origin.sf_begin,
+                      arg_res.aar_element.se_origin.sf_end,
+                      arg_res.aar_element.se_value.c_str());
+            auto start_point = rc.get_point_for_offset(
+                args_sf.sf_begin + arg_res.aar_element.se_origin.sf_begin);
+            auto end_point = rc.get_point_for_offset(
+                args_sf.sf_begin + arg_res.aar_element.se_origin.sf_end);
+            auto crange = arg_res.aar_element.se_origin.empty()
+                ? line_range{rc.tc_cursor.x, rc.tc_cursor.x}
+                : line_range{start_point.x, end_point.x};
+            if (arg_res.aar_help->ht_format
+                == help_parameter_format_t::HPF_CONFIG_VALUE)
+            {
+                log_debug(
+                    "arg path %s",
+                    parsed_cmd.p_args["option"].a_values[0].se_value.c_str());
+                auto poss = prompt.get_config_value_completion(
+                    parsed_cmd.p_args["option"].a_values[0].se_value,
+                    arg_res.aar_element.se_origin.to_string());
+                rc.open_popup_for_completion(crange, poss);
+                rc.tc_popup.set_title(arg_res.aar_help->ht_name);
+            } else if (is_req || arg_res.aar_required
+                       || (!arg_res.aar_element.se_origin.empty()
+                           && rc.tc_popup_type
+                               != textinput_curses::popup_type_t::none))
+            {
+                log_debug(" req %d %d", is_req, arg_res.aar_required);
+                auto poss = prompt.get_cmd_parameter_completion(
+                    *tc,
+                    &iter->second->c_help,
+                    arg_res.aar_help,
+                    arg_res.aar_element.se_value.empty()
+                        ? arg_res.aar_element.se_origin.to_string()
+                        : arg_res.aar_element.se_value);
+                rc.open_popup_for_completion(crange, poss);
+                rc.tc_popup.set_title(arg_res.aar_help->ht_name);
+            } else if (arg_res.aar_help->ht_format
+                           == help_parameter_format_t::HPF_REGEX
+                       && arg_res.aar_element.se_value.empty()
+                       && rc.is_cursor_at_end_of_line())
+            {
+                auto re_arg = parsed_cmd.p_args[arg_res.aar_help->ht_name];
+                if (!re_arg.a_values.empty()) {
+                    rc.tc_suggestion = prompt.get_regex_suggestion(
+                        *tc, re_arg.a_values[0].se_value);
+                } else {
+                    rc.tc_suggestion.clear();
+                }
+            } else {
+                rc.tc_suggestion.clear();
+            }
+        } else {
+            log_info("no arg at %d", x);
+        }
+    }
+}
+
+static void
+rl_sql_change(textinput_curses& rc, bool is_req)
+{
+    static const auto* sql_cmd_map
+        = injector::get<readline_context::command_map_t*, sql_cmd_map_tag>();
+    static auto& prompt = lnav::prompt::get();
+
+    const auto line = rc.get_content();
+    const auto line_sf = string_fragment::from_str(line);
+    std::vector<std::string> args;
+    auto is_prql = lnav::sql::is_prql(line);
+
+    log_debug("rl_sql_change");
+
+    if (line.empty() || line.find(' ') == std::string::npos) {
+        log_debug("completing DB command");
+        auto poss_str = (*sql_cmd_map)
+            | lnav::itertools::filter_in([](const auto& cmd_pair) {
+                            return cmd_pair.second->c_dependencies.empty();
+                        })
+            | lnav::itertools::first() | lnav::itertools::similar_to(line, 10);
+        auto poss_width = poss_str | lnav::itertools::map(&std::string::size)
+            | lnav::itertools::max();
+
+        auto poss = poss_str
+            | lnav::itertools::map([&args, &poss_width](const auto& x) {
+                        const auto* summary
+                            = sql_cmd_map->at(x)->c_help.ht_summary
+                            ? sql_cmd_map->at(x)->c_help.ht_summary
+                            : sqlite_function_help.find(x)->second->ht_summary;
+                        return attr_line_t()
+                            .append(x, VC_ROLE.value(role_t::VCR_KEYWORD))
+                            .highlight_fuzzy_matches(cget(args, 0).value_or(""))
+                            .append(" ")
+                            .pad_to(poss_width.value_or(0) + 1)
+                            .append(summary)
+                            .with_attr_for_all(
+                                lnav::prompt::SUBST_TEXT.value(x + " "));
+                    });
+
+        rc.open_popup_for_completion(0, poss);
+        rc.tc_popup.set_title("DB Command");
+    } else if (is_prql) {
+        auto anno_line = attr_line_t(line);
+        lnav::sql::annotate_prql_statement(anno_line);
+        auto cursor_offset = prompt.p_editor.get_cursor_offset();
+
+        log_debug("curs %d", cursor_offset);
+        for (const auto& attr : anno_line.al_attrs) {
+            log_debug("attr [%d:%d) %s",
+                      attr.sa_range.lr_start,
+                      attr.sa_range.lr_end,
+                      attr.sa_type->sat_name);
+        }
+
+        auto attr_iter = rfind_string_attr_if(
+            anno_line.al_attrs, cursor_offset, [](const auto& x) {
+                return x.sa_type != &lnav::sql::PRQL_STAGE_ATTR;
+            });
+        auto stage_iter = rfind_string_attr_if(
+            anno_line.al_attrs, cursor_offset, [](const auto& x) {
+                return x.sa_type == &lnav::sql::PRQL_STAGE_ATTR;
+            });
+        if (attr_iter != anno_line.al_attrs.end()) {
+            auto to_complete_sf = anno_line.to_string_fragment(attr_iter);
+            auto to_complete = to_complete_sf.to_string();
+            std::vector<attr_line_t> poss;
+            std::string title;
+
+            log_debug("prql attr [%d:%d) %s",
+                      attr_iter->sa_range.lr_start,
+                      attr_iter->sa_range.lr_end,
+                      attr_iter->sa_type->sat_name);
+            auto prev_attr_iter = std::prev(attr_iter);
+            if (attr_iter->sa_type == &lnav::sql::PRQL_PIPE_ATTR
+                || (attr_iter->sa_type == &lnav::sql::PRQL_FQID_ATTR
+                    && (prev_attr_iter->sa_type == &lnav::sql::PRQL_PIPE_ATTR
+                        || prev_attr_iter->sa_type
+                            == &lnav::sql::PRQL_STAGE_ATTR)))
+            {
+                if (attr_iter->sa_type == &lnav::sql::PRQL_PIPE_ATTR) {
+                    to_complete.clear();
+                }
+                auto poss_str
+                    = (*sql_cmd_map)
+                    | lnav::itertools::filter_in(
+                          [](const readline_context::command_map_t::value_type&
+                                 p) {
+                              return !p.second->c_dependencies.empty();
+                          })
+                    | lnav::itertools::first()
+                    | lnav::itertools::similar_to(to_complete, 10);
+                auto width = poss_str | lnav::itertools::map(&std::string::size)
+                    | lnav::itertools::max();
+
+                title = "transform";
+                poss = poss_str
+                    | lnav::itertools::map([&width,
+                                            &to_complete](const auto& x) {
+                           const auto& ht = sql_cmd_map->at(x)->c_help;
+                           auto sub_value = x + " ";
+                           if (!ht.ht_parameters.empty()
+                               && ht.ht_parameters[0].ht_group_start)
+                           {
+                               sub_value.append(
+                                   ht.ht_parameters[0].ht_group_start);
+                               sub_value.push_back(' ');
+                           }
+                           return attr_line_t()
+                               .append(x, VC_ROLE.value(role_t::VCR_FUNCTION))
+                               .highlight_fuzzy_matches(to_complete)
+                               .append(" ")
+                               .pad_to(width.value_or(0) + 1)
+                               .append(ht.ht_summary)
+                               .with_attr_for_all(
+                                   lnav::prompt::SUBST_TEXT.value(sub_value));
+                       });
+            } else if (attr_iter->sa_type == &lnav::sql::PRQL_FQID_ATTR
+                       && attr_iter->sa_range.lr_end == cursor_offset)
+            {
+                poss = prompt.p_prql_completions | lnav::itertools::first()
+                    | lnav::itertools::similar_to(to_complete, 10)
+                    | lnav::itertools::map([&to_complete](const auto& x) {
+                           return prompt.get_sql_completion_text(
+                               to_complete, *prompt.p_prql_completions.find(x));
+                       });
+            }
+            auto crange
+                = std::make_from_tuple<line_range>(line_sf.byte_to_column_index(
+                    to_complete_sf.sf_begin, to_complete_sf.sf_end));
+            rc.open_popup_for_completion(crange, poss);
+            rc.tc_popup.set_title(title);
+        }
+    } else if (!prompt.p_in_completion) {
+        // change was not from a completion
+        clear_preview();
+
+        auto anno_line = rc.tc_lines[rc.tc_cursor.y];
+        annotate_sql_statement(anno_line);
+        auto cursor_offset = anno_line.column_to_byte_index(rc.tc_cursor.x);
+
+        auto attr_iter = rfind_string_attr_if(
+            anno_line.al_attrs,
+            cursor_offset,
+            [cursor_offset](const string_attr& attr) {
+                return attr.sa_range.lr_start <= cursor_offset
+                    && cursor_offset <= attr.sa_range.lr_end;
+            });
+        if (attr_iter != anno_line.al_attrs.end()) {
+            if (!is_req && attr_iter->sa_type == &SQL_HEX_LIT_ATTR
+                && attr_iter->sa_range.length() == 2)
+            {
+            } else if (is_req
+                       || (attr_iter->sa_type != &SQL_NUMBER_ATTR
+                           && attr_iter->sa_type != &SQL_HEX_LIT_ATTR)
+                       || rc.tc_popup_type
+                           == textinput_curses::popup_type_t::completion)
+            {
+                auto to_complete_sf = anno_line.to_string_fragment(attr_iter);
+                auto to_complete = to_complete_sf.to_string();
+                std::vector<std::string> poss_strs;
+                std::vector<attr_line_t> poss;
+
+                log_debug("SQL complete: %s -- %s",
+                          attr_iter->sa_type->sat_name,
+                          to_complete.c_str());
+                poss_strs = prompt.p_sql_completion_terms
+                    | lnav::itertools::similar_to(to_complete, 10);
+                for (const auto& str : poss_strs) {
+                    auto eq_range = prompt.p_sql_completions.equal_range(str);
+
+                    for (auto iter = eq_range.first; iter != eq_range.second;
+                         ++iter)
+                    {
+                        auto al = prompt.get_sql_completion_text(to_complete,
+                                                                 *iter);
+                        poss.emplace_back(al);
+                    }
+                }
+
+                auto crange = std::make_from_tuple<line_range>(
+                    line_sf.byte_to_column_index(to_complete_sf.sf_begin,
+                                                 to_complete_sf.sf_end));
+                log_debug("sql complete range [%d:%d)",
+                          crange.lr_start,
+                          crange.lr_end);
+                rc.open_popup_for_completion(crange, poss);
+                rc.tc_popup.set_title("");
+            }
+        } else if (is_req) {
+            std::vector<attr_line_t> poss;
+
+            for (const auto& sql_pair : prompt.p_sql_completions) {
+                const auto& item = sql_pair.second;
+                auto add = item.is<lnav::prompt::sql_table_t>()
+                    || item.is<lnav::prompt::sql_function_t>()
+                    || item.is<lnav::prompt::sql_format_column_t>();
+                if (!add) {
+                    continue;
+                }
+
+                poss.emplace_back(prompt.get_sql_completion_text("", sql_pair));
+            }
+            rc.open_popup_for_completion(rc.tc_cursor.x, poss);
+            rc.tc_popup.set_title("");
+        }
+    }
+
+    split_ws(line, args);
+    if (!args.empty()) {
+        auto cmd_iter = sql_cmd_map->find(args[0]);
+        if (cmd_iter != sql_cmd_map->end()) {
+            const auto* sql_cmd = cmd_iter->second;
+            if (sql_cmd->c_prompt != nullptr) {
+                const auto prompt_res
+                    = sql_cmd->c_prompt(lnav_data.ld_exec_context, line);
+
+                rc.tc_suggestion = prompt_res.pr_suggestion;
+            }
+        }
+    }
+}
+
+static void
+rl_search_change(textinput_curses& rc, bool is_req)
+{
+    static const auto SEARCH_HELP
+        = help_text("search", "search the view for a pattern")
+              .with_parameter(
+                  help_text("pattern", "The pattern to search for")
+                      .with_format(help_parameter_format_t::HPF_REGEX));
+    static auto& prompt = lnav::prompt::get();
+
+    auto* tc = get_textview_for_mode(lnav_data.ld_mode);
+    auto line = rc.get_content();
+    auto line_sf = string_fragment::from_str(line);
+    if (line.empty() && tc->tc_selected_text) {
+        rc.tc_suggestion = tc->tc_selected_text->sti_value;
+    } else {
+        rc.tc_suggestion.clear();
+    }
+    if (rc.tc_suggestion.empty()) {
+        auto parse_res = lnav::command::parse_for_prompt(
+            lnav_data.ld_exec_context, line, SEARCH_HELP);
+
+        auto byte_x = line_sf.column_to_byte_index(rc.tc_cursor.x);
+        auto arg_res_opt = parse_res.arg_at(byte_x);
+        if (arg_res_opt) {
+            auto arg_pair = arg_res_opt.value();
+            log_debug("apair %s [%d:%d) -- %s",
+                      arg_pair.aar_help->ht_name,
+                      arg_pair.aar_element.se_origin.sf_begin,
+                      arg_pair.aar_element.se_origin.sf_end,
+                      arg_pair.aar_element.se_value.c_str());
+            if (is_req
+                || (!arg_pair.aar_element.se_origin.empty()
+                    && rc.tc_popup_type
+                        != textinput_curses::popup_type_t::none))
+            {
+                auto poss = prompt.get_cmd_parameter_completion(
+                    *tc,
+                    &SEARCH_HELP,
+                    arg_pair.aar_help,
+                    arg_pair.aar_element.se_value);
+
+                auto crange = arg_pair.aar_element.se_origin.empty()
+                    ? line_range{rc.tc_cursor.x, rc.tc_cursor.x}
+                    : std::make_from_tuple<line_range>(
+                          line_sf.byte_to_column_index(
+                              arg_pair.aar_element.se_origin.sf_begin,
+                              arg_pair.aar_element.se_origin.sf_end));
+                rc.open_popup_for_completion(crange, poss);
+                rc.tc_popup.set_title(arg_pair.aar_help->ht_name);
+            } else if (!line.empty() && arg_pair.aar_element.se_value.empty()
+                       && rc.is_cursor_at_end_of_line())
+            {
+                rc.tc_suggestion = prompt.get_regex_suggestion(*tc, line);
+            } else {
+                log_debug("not at end of line %d %d",
+                          arg_pair.aar_element.se_value.empty(),
+                          rc.is_cursor_at_end_of_line());
+                rc.tc_suggestion.clear();
+            }
+        } else {
+            log_debug("no arg");
+        }
+    }
+}
+
+static void
+rl_exec_change(textinput_curses& rc, bool is_req)
+{
+    static const auto EXEC_HELP
+        = help_text("exec", "execute a script")
+              .with_parameter(
+                  help_text("arg", "Arguments for the script")
+                      .with_format(help_parameter_format_t::HPF_TEXT));
+
+    static auto& prompt = lnav::prompt::get();
+    auto* tc = get_textview_for_mode(lnav_data.ld_mode);
+
+    clear_preview();
+
+    const auto line = rc.get_content();
+    shlex lexer(line);
+    auto split_res = lexer.split(lnav_data.ld_exec_context.create_resolver());
+    if (split_res.isErr()) {
+        lnav_data.ld_bottom_source.grep_error(
+            split_res.unwrapErr().se_error.te_msg);
+        lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
+    } else {
+        auto split_args = split_res.unwrap();
+        auto script_name = split_args.empty() ? std::string()
+                                              : split_args[0].se_value;
+        const auto& scripts = prompt.p_scripts;
+        const auto iter = scripts.as_scripts.find(script_name);
+
+        if (iter == scripts.as_scripts.end()) {
+            lnav_data.ld_bottom_source.set_prompt(
+                "Enter a script to execute: " ABORT_MSG);
+            lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
+
+            std::vector<attr_line_t> poss;
+            auto width = scripts.as_scripts | lnav::itertools::first()
+                | lnav::itertools::map(&std::string::size)
+                | lnav::itertools::max();
+            if (script_name.empty()) {
+                poss
+                    = scripts.as_scripts
+                    | lnav::itertools::map([&width](const auto& p) {
+                          return attr_line_t()
+                              .append(p.first,
+                                      VC_ROLE.value(role_t::VCR_VARIABLE))
+                              .append(" ")
+                              .pad_to(width.value_or(0) + 1)
+                              .append(p.second[0].sm_description)
+                              .with_attr_for_all(lnav::prompt::SUBST_TEXT.value(
+                                  p.first + " "));
+                      });
+            } else {
+                auto x = prompt.p_editor.get_cursor_offset();
+                if (!script_name.empty() && split_args[0].se_origin.sf_end == x)
+                {
+                    poss = scripts.as_scripts | lnav::itertools::first()
+                        | lnav::itertools::similar_to(script_name, 10)
+                        | lnav::itertools::map([&width, &script_name, &scripts](
+                                                   const auto& x) {
+                               auto siter = scripts.as_scripts.find(x);
+                               auto desc = siter->second[0].sm_description;
+                               return attr_line_t()
+                                   .append(x,
+                                           VC_ROLE.value(role_t::VCR_VARIABLE))
+                                   .highlight_fuzzy_matches(script_name)
+                                   .append(" ")
+                                   .pad_to(width.value_or(0) + 1)
+                                   .append(desc)
+                                   .with_attr_for_all(
+                                       lnav::prompt::SUBST_TEXT.value(x + " "));
+                           });
+                }
+            }
+
+            prompt.p_editor.open_popup_for_completion(0, poss);
+        } else {
+            auto& meta = iter->second[0];
+
+            if (!iter->second[0].sm_description.empty()) {
+                auto help_text = fmt::format(
+                    FMT_STRING(ANSI_BOLD("{}") " -- {}   " ABORT_MSG),
+                    meta.sm_synopsis,
+                    meta.sm_description);
+                lnav_data.ld_bottom_source.set_prompt(help_text);
+                lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
+            }
+
+            auto line_sf = to_string_fragment(line);
+            auto parse_res = lnav::command::parse_for_prompt(
+                lnav_data.ld_exec_context, line, EXEC_HELP);
+            auto byte_x = line_sf.column_to_byte_index(rc.tc_cursor.x);
+            auto arg_res_opt = parse_res.arg_at(byte_x);
+            if (arg_res_opt) {
+                auto arg_pair = arg_res_opt.value();
+                if (is_req
+                    || rc.tc_popup_type != textinput_curses::popup_type_t::none)
+                {
+                    auto poss = prompt.get_cmd_parameter_completion(
+                        *tc,
+                        &EXEC_HELP,
+                        arg_pair.aar_help,
+                        arg_pair.aar_element.se_value);
+                    auto crange = std::make_from_tuple<line_range>(
+                        line_sf.byte_to_column_index(
+                            arg_pair.aar_element.se_origin.sf_begin,
+                            arg_pair.aar_element.se_origin.sf_end));
+                    rc.open_popup_for_completion(crange, poss);
+                    rc.tc_popup.set_title(arg_pair.aar_help->ht_name);
+                } else if (!line.empty()
+                           && arg_pair.aar_element.se_value.empty()
+                           && rc.is_cursor_at_end_of_line())
+                {
+                    rc.tc_suggestion = prompt.get_regex_suggestion(*tc, line);
+                } else {
+                    log_debug("not at end of line %d %d",
+                              arg_pair.aar_element.se_value.empty(),
+                              rc.is_cursor_at_end_of_line());
+                    rc.tc_suggestion.clear();
+                }
+            }
+        }
     }
 }
 
@@ -532,6 +968,7 @@ rl_change(textinput_curses& rc)
     static auto& prompt = lnav::prompt::get();
     auto* tc = get_textview_for_mode(lnav_data.ld_mode);
 
+    rc.tc_suggestion.clear();
     tc->get_highlights().erase({highlight_source_t::PREVIEW, "preview"});
     tc->get_highlights().erase({highlight_source_t::PREVIEW, "bodypreview"});
     lnav_data.ld_log_source.set_preview_sql_filter(nullptr);
@@ -539,85 +976,27 @@ rl_change(textinput_curses& rc)
 
     log_debug("rl_change");
 
+    if (prompt.p_editor.tc_mode == textinput_curses::mode_t::show_help) {
+        return;
+    }
+
+    if (rc.tc_popup_type == textinput_curses::popup_type_t::history
+        && !prompt.p_replace_from_history)
+    {
+        rc.tc_on_history_search(rc);
+        return;
+    }
+
     switch (lnav_data.ld_mode) {
-        case ln_mode_t::SEARCH: {
-            if (rc.get_content().empty() && tc->tc_selected_text) {
-                rc.tc_suggestion = tc->tc_selected_text->sti_value;
-            }
+        case ln_mode_t::SEARCH:
+        case ln_mode_t::SEARCH_FILES:
+        case ln_mode_t::SEARCH_FILTERS:
+        case ln_mode_t::SEARCH_SPECTRO_DETAILS: {
+            rl_search_change(rc, false);
             break;
         }
         case ln_mode_t::SQL: {
-            static const auto* sql_cmd_map
-                = injector::get<readline_context::command_map_t*,
-                                sql_cmd_map_tag>();
-
-            const auto line = rc.get_content();
-            std::vector<std::string> args;
-
-            if (!lnav::sql::is_prql(line)) {
-                clear_preview();
-
-                switch (rc.tc_popup_type) {
-                    case textinput_curses::popup_type_t::history: {
-                        rc.tc_on_history(rc);
-                        break;
-                    }
-                    default: {
-                        auto anno_line = attr_line_t(line);
-                        annotate_sql_statement(anno_line);
-                        auto byte_x = anno_line.column_to_byte_index(
-                            prompt.p_editor.tc_cursor.x);
-
-                        auto attr_iter = rfind_string_attr_if(
-                            anno_line.al_attrs, byte_x, [](const auto&) {
-                                return true;
-                            });
-                        if (attr_iter != anno_line.al_attrs.end()
-                            && attr_iter->sa_range.lr_end == byte_x)
-                        {
-                            auto to_complete
-                                = anno_line.to_string_fragment(attr_iter)
-                                      .to_string();
-                            auto poss_strs = prompt.p_sql_completions
-                                | lnav::itertools::first()
-                                | lnav::itertools::similar_to(to_complete, 10);
-                            std::vector<attr_line_t> poss;
-
-                            for (const auto& str : poss_strs) {
-                                auto eq_range
-                                    = prompt.p_sql_completions.equal_range(str);
-
-                                for (auto iter = eq_range.first;
-                                     iter != eq_range.second;
-                                     ++iter)
-                                {
-                                    auto al
-                                        = prompt.get_sql_completion_text(*iter);
-                                    poss.emplace_back(al);
-                                }
-                            }
-                            auto left = anno_line.byte_to_column_index(
-                                attr_iter->sa_range.lr_start);
-                            rc.open_popup_for_completion(left, poss);
-                        }
-                        break;
-                    }
-                }
-            }
-
-            split_ws(line, args);
-            if (!args.empty()) {
-                auto cmd_iter = sql_cmd_map->find(args[0]);
-                if (cmd_iter != sql_cmd_map->end()) {
-                    const auto* sql_cmd = cmd_iter->second;
-                    if (sql_cmd->c_prompt != nullptr) {
-                        const auto prompt_res = sql_cmd->c_prompt(
-                            lnav_data.ld_exec_context, line);
-
-                        rc.tc_suggestion = prompt_res.pr_suggestion;
-                    }
-                }
-            }
+            rl_sql_change(rc, false);
             break;
         }
         case ln_mode_t::COMMAND: {
@@ -625,30 +1004,7 @@ rl_change(textinput_curses& rc)
             break;
         }
         case ln_mode_t::EXEC: {
-            clear_preview();
-
-            const auto line = rc.get_content();
-            size_t name_end = line.find(' ');
-            const auto script_name = line.substr(0, name_end);
-            auto& scripts = injector::get<available_scripts&>();
-            auto iter = scripts.as_scripts.find(script_name);
-
-            if (iter == scripts.as_scripts.end()
-                || iter->second[0].sm_description.empty())
-            {
-                lnav_data.ld_bottom_source.set_prompt(
-                    "Enter a script to execute: " ABORT_MSG);
-            } else {
-                auto& meta = iter->second[0];
-                char help_text[1024];
-
-                snprintf(help_text,
-                         sizeof(help_text),
-                         ANSI_BOLD("%s") " -- %s   " ABORT_MSG,
-                         meta.sm_synopsis.c_str(),
-                         meta.sm_description.c_str());
-                lnav_data.ld_bottom_source.set_prompt(help_text);
-            }
+            rl_exec_change(rc, false);
             break;
         }
         default:
@@ -678,6 +1034,7 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
         case ln_mode_t::SEARCH_FILES:
         case ln_mode_t::SEARCH_SPECTRO_DETAILS:
             name = "$search";
+            clear_preview();
             break;
 
         case ln_mode_t::CAPTURE:
@@ -716,6 +1073,8 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                 lnav_data.ld_bottom_source.grep_error(
                     result.unwrapErr().um_message.get_string());
             }
+            lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
+            lnav_data.ld_winched = true;
 
             lnav_data.ld_preview_view[0].reload_data();
 
@@ -728,6 +1087,7 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
 
             if (!term_val.empty() && term_val[0] == '.') {
                 lnav_data.ld_bottom_source.grep_error("");
+                lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
             } else if (lnav::sql::is_prql(term_val)) {
                 std::string alt_msg;
 
@@ -740,14 +1100,17 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                 auto orig_prql_stmt = attr_line_t(term_val);
                 orig_prql_stmt.rtrim("| \r\n\t");
                 annotate_sql_statement(orig_prql_stmt);
-                auto cursor_x = rc.tc_cursor.x;
-                if (cursor_x > orig_prql_stmt.get_string().length()) {
-                    cursor_x = orig_prql_stmt.length() - 1;
+
+                auto cursor_x = rc.get_cursor_offset();
+                if (cursor_x >= orig_prql_stmt.get_string().length()) {
+                    cursor_x = orig_prql_stmt.get_string().length() - 1;
                 }
+
                 auto curr_stage_iter
                     = find_string_attr_containing(orig_prql_stmt.get_attrs(),
                                                   &lnav::sql::PRQL_STAGE_ATTR,
                                                   cursor_x);
+                ensure(curr_stage_iter != orig_prql_stmt.al_attrs.end());
                 auto curr_stage_prql = orig_prql_stmt.subline(
                     0, curr_stage_iter->sa_range.lr_end);
                 for (auto riter = curr_stage_prql.get_attrs().rbegin();
@@ -755,12 +1118,18 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                      ++riter)
                 {
                     if (riter->sa_type != &lnav::sql::PRQL_STAGE_ATTR
-                        || riter->sa_range.lr_start == 0)
+                        || riter->sa_range.lr_start == 0
+                        || riter->sa_range.empty())
                     {
                         continue;
                     }
-                    curr_stage_prql.insert(riter->sa_range.lr_start,
-                                           "| take 10000 ");
+                    auto take10k = std::string("\ntake 10000 ");
+                    if (curr_stage_prql.al_string[riter->sa_range.lr_start]
+                        != '|')
+                    {
+                        take10k.append("\n ");
+                    }
+                    curr_stage_prql.insert(riter->sa_range.lr_start, take10k);
                 }
                 curr_stage_prql.rtrim();
                 curr_stage_prql.append(" | take 5");
@@ -780,14 +1149,21 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                          ++riter)
                     {
                         if (riter->sa_type != &lnav::sql::PRQL_STAGE_ATTR
-                            || riter->sa_range.lr_start == 0)
+                            || riter->sa_range.lr_start == 0
+                            || riter->sa_range.empty())
                         {
                             continue;
                         }
+                        auto take10k = std::string("\ntake 10000 ");
+                        if (prev_stage_prql.al_string[riter->sa_range.lr_start]
+                            != '|')
+                        {
+                            take10k.append("\n ");
+                        }
                         prev_stage_prql.insert(riter->sa_range.lr_start,
-                                               "| take 10000 ");
+                                               take10k);
                     }
-                    prev_stage_prql.append(" | take 5");
+                    prev_stage_prql.append("\ntake 5");
 
                     curr_stage_index = 1;
                     auto src_guard = lnav_data.ld_exec_context.enter_source(
@@ -801,6 +1177,7 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                         .get_description()
                         .set_value("Result for query: %s",
                                    prev_stage_prql.get_string().c_str());
+                    lnav_data.ld_status[LNS_PREVIEW0].set_needs_update();
                     if (exec_res.isOk()) {
                         lnav_data.ld_preview_view[0].set_sub_source(
                             &lnav_data.ld_db_preview_source[0]);
@@ -829,9 +1206,10 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                 if (exec_res.isErr()) {
                     lnav_data.ld_bottom_source.grep_error(
                         err.um_reason.get_string());
+                    lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
 
                     curr_stage_prql.erase(curr_stage_prql.get_string().length()
-                                          - 9);
+                                          - 8);
                     auto near = curr_stage_prql.get_string().length() - 1;
                     while (near > 0) {
                         auto paren_iter = rfind_string_attr_if(
@@ -859,7 +1237,7 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                         near = paren_iter->sa_range.lr_start - 1;
                     }
 
-                    curr_stage_prql.append(" | take 5");
+                    curr_stage_prql.append("\ntake 5");
                     auto exec_termed_res
                         = execute_sql(lnav_data.ld_exec_context,
                                       curr_stage_prql.get_string(),
@@ -869,6 +1247,7 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                     }
                 } else {
                     lnav_data.ld_bottom_source.grep_error("");
+                    lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
                 }
 
                 rl_sql_help(rc);
@@ -877,6 +1256,7 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
                     .get_description()
                     .set_value("Result for query: %s",
                                curr_stage_prql.get_string().c_str());
+                lnav_data.ld_status[LNS_PREVIEW0].set_needs_update();
                 if (!lnav_data.ld_db_preview_source[curr_stage_index]
                          .dls_headers.empty())
                 {
@@ -915,6 +1295,7 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
             if (!sqlite3_complete(term_val.c_str())) {
                 lnav_data.ld_bottom_source.grep_error(
                     "SQL error: incomplete statement");
+                lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
             } else {
                 auto_mem<sqlite3_stmt> stmt(sqlite3_finalize);
                 int retcode;
@@ -929,9 +1310,24 @@ rl_search_internal(textinput_curses& rc, ln_mode_t mode, bool complete = false)
 
                     lnav_data.ld_bottom_source.grep_error(
                         fmt::format(FMT_STRING("SQL error: {}"), errmsg));
+
+#if defined(HAVE_SQLITE3_ERROR_OFFSET)
+                    {
+                        auto erroff = sqlite3_error_offset(lnav_data.ld_db);
+
+                        if (erroff >= 0) {
+                            auto mark = rc.get_point_for_offset(erroff);
+                            auto um
+                                = lnav::console::user_message::error(errmsg);
+
+                            rc.add_mark(mark, um);
+                        }
+                    }
+#endif
                 } else {
                     lnav_data.ld_bottom_source.grep_error("");
                 }
+                lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
             }
 
             if (!rl_sql_help(rc)) {
@@ -985,6 +1381,7 @@ lnav_rl_abort(textinput_curses& rc)
     reload_config(errors);
 
     lnav_data.ld_bottom_source.grep_error("");
+    lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
     switch (lnav_data.ld_mode) {
         case ln_mode_t::SEARCH:
             tc->set_selection(lnav_data.ld_search_start_line);
@@ -996,27 +1393,31 @@ lnav_rl_abort(textinput_curses& rc)
         default:
             break;
     }
-    rc.tc_inactive_value.clear();
+    rc.clear_inactive_value();
+
     set_view_mode(ln_mode_t::PAGING);
 }
 
-static void
-rl_callback_int(textinput_curses& rc, bool is_alt)
+void
+rl_callback(textinput_curses& rc)
 {
     static const intern_string_t SRC = intern_string::lookup("prompt");
     static auto& prompt = lnav::prompt::get();
+    auto is_alt = prompt.p_alt_mode;
 
-    textview_curses* tc = get_textview_for_mode(lnav_data.ld_mode);
-    exec_context& ec = lnav_data.ld_exec_context;
+    auto* tc = get_textview_for_mode(lnav_data.ld_mode);
+    auto& ec = lnav_data.ld_exec_context;
     std::string alt_msg;
 
     lnav_data.ld_bottom_source.set_prompt("");
+    lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
     lnav_data.ld_doc_source.clear();
     lnav_data.ld_example_source.clear();
     clear_preview();
     tc->get_highlights().erase({highlight_source_t::PREVIEW, "preview"});
     tc->get_highlights().erase({highlight_source_t::PREVIEW, "bodypreview"});
     lnav_data.ld_log_source.set_preview_sql_filter(nullptr);
+    layout_views();
 
     auto new_mode = ln_mode_t::PAGING;
 
@@ -1034,7 +1435,8 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
             break;
     }
 
-    auto old_mode = std::exchange(lnav_data.ld_mode, new_mode);
+    auto old_mode = lnav_data.ld_mode;
+    set_view_mode(new_mode);
     switch (old_mode) {
         case ln_mode_t::BREADCRUMBS:
         case ln_mode_t::PAGING:
@@ -1047,7 +1449,7 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
             break;
 
         case ln_mode_t::COMMAND: {
-            rc.tc_alt_value.clear();
+            rc.clear_alt_value();
             auto cmdline = rc.get_content();
             auto src_guard = lnav_data.ld_exec_context.enter_source(
                 SRC, 1, fmt::format(FMT_STRING(":{}"), cmdline));
@@ -1057,7 +1459,7 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
             auto hist_guard = prompt.p_cmd_history.start_operation(cmdline);
             auto exec_res = execute_command(ec, cmdline);
             if (exec_res.isOk()) {
-                rc.tc_inactive_value = exec_res.unwrap();
+                rc.set_inactive_value(exec_res.unwrap());
             } else {
                 auto um = exec_res.unwrapErr();
 
@@ -1067,16 +1469,16 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
                 lnav_data.ld_user_message_view.reload_data();
                 lnav_data.ld_user_message_expiration
                     = std::chrono::steady_clock::now() + 20s;
-                rc.tc_inactive_value.clear();
+                rc.clear_inactive_value();
             }
             ec.ec_source.back().s_content.clear();
             break;
         }
 
         case ln_mode_t::USER:
-            rc.tc_alt_value.clear();
+            rc.clear_alt_value();
             ec.ec_local_vars.top()["value"] = rc.get_content();
-            rc.tc_inactive_value.clear();
+            rc.clear_inactive_value();
             break;
 
         case ln_mode_t::SEARCH:
@@ -1131,44 +1533,44 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
                         return true;
                     });
                 }
-                rc.tc_inactive_value
-                    = attr_line_t("search: ").append(rc.get_content());
-                rc.tc_alt_value = HELP_MSG_2(
-                    n, N, "to move forward/backward through search results");
+                rc.set_inactive_value(
+                    attr_line_t("search: ").append(rc.get_content()));
+                rc.set_alt_value(HELP_MSG_2(
+                    n, N, "to move forward/backward through search results"));
             }
             break;
         }
 
         case ln_mode_t::SQL: {
             auto sql_str = rc.get_content();
+
+            if (sql_str.empty()) {
+                return;
+            }
             auto src_guard = lnav_data.ld_exec_context.enter_source(
                 SRC, 1, fmt::format(FMT_STRING(";{}"), sql_str));
             readline_lnav_highlighter(ec.ec_source.back().s_content, -1);
             ec.ec_source.back().s_content.with_attr_for_all(
                 VC_ROLE.value(role_t::VCR_QUOTED_CODE));
 
-            rc.tc_inactive_value
-                = lnav::console::user_message::info(
-                      attr_line_t("executing SQL statement, press ")
-                          .append("CTRL+]"_hotkey)
-                          .append(" to cancel"))
-                      .to_attr_line();
-            rc.set_needs_update();
             auto hist_guard = prompt.p_sql_history.start_operation(sql_str);
-            auto result = execute_sql(ec, sql_str, alt_msg);
             auto& dls = lnav_data.ld_db_row_source;
-            attr_line_t prompt;
+            auto before_dls_gen = dls.dls_generation;
+            auto result = execute_sql(ec, sql_str, alt_msg);
+            attr_line_t res;
 
             if (result.isOk()) {
                 auto msg = result.unwrap();
 
                 if (!msg.empty()) {
-                    prompt = lnav::console::user_message::ok(
-                                 attr_line_t("SQL Result: ")
-                                     .append(attr_line_t::from_ansi_str(
-                                         msg.c_str())))
-                                 .to_attr_line();
-                    if (dls.dls_row_cursors.size() > 1) {
+                    res = lnav::console::user_message::ok(
+                              attr_line_t("SQL Result: ")
+                                  .append(
+                                      attr_line_t::from_ansi_str(msg.c_str())))
+                              .to_attr_line();
+                    if (before_dls_gen != dls.dls_generation
+                        && dls.dls_row_cursors.size() > 1)
+                    {
                         ensure_view(&lnav_data.ld_views[LNV_DB]);
                     }
                 }
@@ -1183,8 +1585,8 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
             }
             ec.ec_source.back().s_content.clear();
 
-            rc.tc_inactive_value = prompt;
-            rc.tc_alt_value = alt_msg;
+            rc.set_inactive_value(res);
+            rc.set_alt_value(alt_msg);
             break;
         }
 
@@ -1195,9 +1597,9 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
                 lnav::paths::workdir() / "exec.XXXXXX");
 
             if (open_temp_res.isErr()) {
-                rc.tc_inactive_value = fmt::format(
+                rc.set_inactive_value(fmt::format(
                     FMT_STRING("Unable to open temporary output file: {}"),
-                    open_temp_res.unwrapErr());
+                    open_temp_res.unwrapErr()));
             } else {
                 char desc[256], timestamp[32];
                 time_t current_time = time(nullptr);
@@ -1205,6 +1607,8 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
                 auto tmp_pair = open_temp_res.unwrap();
                 auto fd_copy = tmp_pair.second.dup();
                 auto tf = text_format_t::TF_UNKNOWN;
+                auto& dls = lnav_data.ld_db_row_source;
+                auto before_dls_gen = dls.dls_generation;
 
                 {
                     exec_context::output_guard og(
@@ -1218,7 +1622,7 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
                         path_and_args);
                     auto exec_res = execute_file(ec, path_and_args);
                     if (exec_res.isOk()) {
-                        rc.tc_inactive_value = exec_res.unwrap();
+                        rc.set_inactive_value(exec_res.unwrap());
                         tf = ec.ec_output_stack.back().od_format;
                     } else {
                         auto um = exec_res.unwrapErr();
@@ -1229,7 +1633,7 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
                         lnav_data.ld_user_message_view.reload_data();
                         lnav_data.ld_user_message_expiration
                             = std::chrono::steady_clock::now() + 20s;
-                        rc.tc_inactive_value.clear();
+                        rc.clear_inactive_value();
                     }
                 }
 
@@ -1252,9 +1656,13 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
                         .with_detect_format(false)
                         .with_text_format(tf)
                         .with_init_location(0_vl);
-                    lnav_data.ld_files_to_front.emplace_back(desc, 0_vl);
+                    lnav_data.ld_files_to_front.emplace_back(desc);
 
-                    rc.tc_alt_value = HELP_MSG_1(X, "to close the file");
+                    rc.set_alt_value(HELP_MSG_1(X, "to close the file"));
+                } else if (before_dls_gen != dls.dls_generation
+                           && dls.dls_row_cursors.size() > 1)
+                {
+                    ensure_view(&lnav_data.ld_views[LNV_DB]);
                 }
             }
             break;
@@ -1263,36 +1671,32 @@ rl_callback_int(textinput_curses& rc, bool is_alt)
 }
 
 void
-rl_callback(textinput_curses& rc)
-{
-    rl_callback_int(rc, false);
-}
-
-void
-rl_alt_callback(textinput_curses& rc)
-{
-    rl_callback_int(rc, true);
-}
-
-void
 rl_completion_request(textinput_curses& rc)
 {
     switch (lnav_data.ld_mode) {
+        case ln_mode_t::SEARCH:
+        case ln_mode_t::SEARCH_FILES:
+        case ln_mode_t::SEARCH_FILTERS:
+        case ln_mode_t::SEARCH_SPECTRO_DETAILS: {
+            rl_search_change(rc, true);
+            break;
+        }
         case ln_mode_t::COMMAND: {
             rl_cmd_change(rc, true);
             break;
         }
+        case ln_mode_t::SQL: {
+            rl_sql_change(rc, true);
+            break;
+        }
+        case ln_mode_t::EXEC: {
+            rl_exec_change(rc, true);
+            break;
+        }
+
+        default:
+            break;
     }
-#if 0
-    isc::to<tailer::looper&, services::remote_tailer_t>().send(
-        [rc](auto& tlooper) {
-            auto rp_opt = humanize::network::path::from_str(
-                rc->get_remote_complete_path());
-            if (rp_opt) {
-                tlooper.complete_path(*rp_opt);
-            }
-        });
-#endif
 }
 
 void
@@ -1303,31 +1707,45 @@ rl_focus(textinput_curses& rc)
 
     fos->fos_contexts.emplace("", false, true, true);
 
-    get_textview_for_mode(lnav_data.ld_mode)->save_current_search();
+    switch (lnav_data.ld_mode) {
+        case ln_mode_t::SEARCH:
+        case ln_mode_t::SEARCH_FILES:
+        case ln_mode_t::SEARCH_FILTERS:
+        case ln_mode_t::SEARCH_SPECTRO_DETAILS: {
+            auto* tc = get_textview_for_mode(lnav_data.ld_mode);
+            tc->save_current_search();
+            tc->execute_search("");
+            break;
+        }
+        default:
+            break;
+    }
 }
 
 void
 rl_blur(textinput_curses& rc)
 {
-    auto fos = (field_overlay_source*) lnav_data.ld_views[LNV_LOG]
-                   .get_overlay_source();
+    auto* fos = (field_overlay_source*) lnav_data.ld_views[LNV_LOG]
+                    .get_overlay_source();
 
     fos->fos_contexts.pop();
     ensure(!fos->fos_contexts.empty());
     for (auto& tc : lnav_data.ld_views) {
         tc.set_sync_selection_and_top(false);
     }
+    lnav_data.ld_view_stack.top() |
+        [](auto* tc) { tc->set_overlay_selection(std::nullopt); };
     lnav_data.ld_preview_generation += 1;
+    lnav_data.ld_bottom_source.grep_error("");
+    lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
 }
 
 readline_context::split_result_t
-prql_splitter(readline_context& rc, const std::string& cmdline)
+prql_splitter(const attr_line_t& stmt)
 {
-    auto stmt = attr_line_t(cmdline);
     readline_context::split_result_t retval;
     readline_context::stage st;
 
-    lnav::sql::annotate_prql_statement(stmt);
     for (const auto& attr : stmt.get_attrs()) {
         if (attr.sa_type == &lnav::sql::PRQL_STAGE_ATTR) {
         } else if (attr.sa_type == &lnav::sql::PRQL_PIPE_ATTR) {
@@ -1337,8 +1755,8 @@ prql_splitter(readline_context& rc, const std::string& cmdline)
             st.s_args.emplace_back(attr.sa_range);
         }
     }
-    if (!cmdline.empty() && isspace(cmdline.back())) {
-        st.s_args.emplace_back(cmdline.length(), cmdline.length());
+    if (!stmt.empty() && isspace(stmt.al_string.back())) {
+        st.s_args.emplace_back(stmt.length(), stmt.length());
     }
     retval.sr_stages.emplace_back(st);
 

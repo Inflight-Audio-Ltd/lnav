@@ -31,16 +31,19 @@
 #define lnav_prompt_hh
 
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/attr_line.hh"
 #include "base/string_attr_type.hh"
+#include "format.scripts.hh"
 #include "help_text.hh"
 #include "mapbox/variant.hpp"
-#include "textinput_curses.hh"
 #include "textinput.history.hh"
-#include "textview_curses_fwd.hh"
+#include "textinput_curses.hh"
+#include "yajlpp/yajlpp.hh"
 
 namespace lnav {
 
@@ -53,12 +56,17 @@ struct prompt {
     struct sql_db_t {};
     struct sql_table_t {};
     struct sql_table_valued_function_t {};
-    struct sql_function_t {};
+    struct sql_function_t {
+        size_t sf_param_count{0};
+    };
+    struct prql_function_t {};
     struct sql_column_t {};
     struct sql_number_t {};
     struct sql_string_t {};
     struct sql_collation_t {};
     struct sql_var_t {};
+    struct sql_field_var_t {};
+    struct sql_format_column_t {};
 
     using sql_item_t = mapbox::util::variant<sql_keyword_t,
                                              sql_collation_t,
@@ -66,10 +74,13 @@ struct prompt {
                                              sql_table_t,
                                              sql_table_valued_function_t,
                                              sql_function_t,
+                                             prql_function_t,
                                              sql_column_t,
                                              sql_number_t,
                                              sql_string_t,
-                                             sql_var_t>;
+                                             sql_var_t,
+                                             sql_field_var_t,
+                                             sql_format_column_t>;
 
     struct sql_item_meta {
         const char* sim_type_hint;
@@ -99,22 +110,60 @@ struct prompt {
         }
     }
 
-    std::multimap<std::string, sql_item_t> p_sql_completions;
+    std::map<std::string, std::string> p_env_vars;
+    std::multimap<std::string, sql_item_t, strnatcaseless> p_sql_completions;
+    std::set<std::string, strnatless> p_sql_completion_terms;
+    std::map<std::string, sql_item_t, strnatcaseless> p_prql_completions;
+    std::map<std::string, const json_path_handler_base*> p_config_paths;
+    std::map<std::string, std::vector<std::string>> p_config_values;
+    std::set<std::string> p_remote_paths;
+    available_scripts p_scripts;
     textinput_curses p_editor;
+    bool p_alt_mode{false};
+    std::string p_pre_history_content;
+    bool p_replace_from_history{false};
+    bool p_in_completion{false};
+    int32_t p_history_changes{0};
 
-    void focus_for(char sigil);
+    void focus_for(textview_curses& tc,
+                   char sigil,
+                   const std::vector<std::string>& args);
 
     void refresh_sql_completions(textview_curses& tc);
+    void refresh_sql_expr_completions(textview_curses& tc);
     void insert_sql_completion(const std::string& name, const sql_item_t& item);
     const sql_item_meta& sql_item_hint(const sql_item_t& item) const;
+    attr_line_t get_db_completion_text(const std::string& pattern,
+                                       const std::string& str,
+                                       int width) const;
     attr_line_t get_sql_completion_text(
-        const std::pair<std::string, sql_item_t>& p);
+        const std::string& pattern,
+        const std::pair<std::string, sql_item_t>& p) const;
+    std::string get_regex_suggestion(textview_curses& tc,
+                                     const std::string& pattern) const;
 
+    void refresh_config_completions();
     std::vector<attr_line_t> get_cmd_parameter_completion(
-        textview_curses& tc, const help_text* ht, const std::string& str);
+        textview_curses& tc,
+        const help_text* cmd_ht,
+        const help_text* ht,
+        const std::string& str);
+    std::vector<attr_line_t> get_env_completion(const std::string& str);
+    std::vector<attr_line_t> get_config_value_completion(
+        const std::string& path, const std::string& str) const;
 
+    void highlight_match_chars(const std::string& str,
+                               std::vector<attr_line_t>& poss);
+
+    void rl_help(textinput_curses& tc);
+    void rl_reformat(textinput_curses& tc);
     void rl_history(textinput_curses& tc);
+    void rl_history_list(textinput_curses& tc);
+    void rl_history_search(textinput_curses& tc);
     void rl_completion(textinput_curses& tc);
+    void rl_popup_change(textinput_curses& tc);
+    void rl_popup_cancel(textinput_curses& tc);
+    void rl_external_edit(textinput_curses& tc);
 };
 
 }  // namespace lnav

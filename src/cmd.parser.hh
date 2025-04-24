@@ -51,17 +51,26 @@ struct parsed {
         std::vector<shlex::split_element_t> a_values;
     };
 
-    std::optional<std::pair<const help_text*, shlex::split_element_t>> arg_at(
-        int x) const;
+    struct arg_at_result {
+        const help_text* aar_help{nullptr};
+        bool aar_required{false};
+        shlex::split_element_t aar_element;
+    };
+
+    std::optional<arg_at_result> arg_at(int x) const;
 
     const help_text* p_help;
     std::map<std::string, arg_t> p_args;
+    std::vector<shlex::split_element_t> p_free_args;
 };
 
-parsed parse_for_prompt(
-    exec_context& ec, string_fragment args, const help_text& ht);
-Result<parsed, lnav::console::user_message> parse_for_call(
-    exec_context& ec, string_fragment args, const help_text& ht);
+parsed parse_for_prompt(exec_context& ec,
+                        string_fragment args,
+                        const help_text& ht);
+
+Result<parsed, lnav::console::user_message> parse_for_call(exec_context& ec,
+                                                           string_fragment args,
+                                                           const help_text& ht);
 
 }  // namespace lnav::command
 

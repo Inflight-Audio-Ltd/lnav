@@ -82,7 +82,7 @@ plain_text_source::replace_with(const attr_line_t& text_lines)
         lines.pop_back();
     }
     for (auto& line : lines) {
-        auto line_len = line.length() + 1;
+        auto line_len = line.al_string.size() + 1;
         this->tds_lines.emplace_back(off, std::move(line));
         off += line_len;
     }
@@ -255,12 +255,12 @@ std::optional<vis_line_t>
 plain_text_source::line_for_offset(file_off_t off) const
 {
     struct cmper {
-        bool operator()(const file_off_t& lhs, const text_line& rhs)
+        bool operator()(const file_off_t& lhs, const text_line& rhs) const
         {
             return lhs < rhs.tl_offset;
         }
 
-        bool operator()(const text_line& lhs, const file_off_t& rhs)
+        bool operator()(const text_line& lhs, const file_off_t& rhs) const
         {
             return lhs.tl_offset < rhs;
         }
@@ -270,6 +270,7 @@ plain_text_source::line_for_offset(file_off_t off) const
         return std::nullopt;
     }
 
+    log_trace("line_for_offset(%d)", off);
     auto iter = std::lower_bound(
         this->tds_lines.begin(), this->tds_lines.end(), off, cmper{});
     if (iter == this->tds_lines.end()) {
@@ -281,11 +282,14 @@ plain_text_source::line_for_offset(file_off_t off) const
     }
 
     if (!iter->contains_offset(off) && iter != this->tds_lines.begin()) {
+        log_trace("  lower_bound (%lld) does not contain offset",
+                  iter->tl_offset);
         --iter;
     }
 
-    return std::make_optional(
-        vis_line_t(std::distance(this->tds_lines.begin(), iter)));
+    auto retval = vis_line_t(std::distance(this->tds_lines.begin(), iter));
+    log_trace("  retval=%d", retval);
+    return retval;
 }
 
 void
@@ -414,7 +418,9 @@ plain_text_source::row_for_anchor(const std::string& id)
             if (scan_res && scan_res->range().empty()) {
                 path.emplace_back(scan_res->value());
             } else {
-                path.emplace_back(json_ptr::decode(comp_pair.first));
+                stack_buf allocator;
+                path.emplace_back(
+                    json_ptr::decode(comp_pair.first, allocator).to_string());
             }
             hier_sf = comp_pair.second;
         }
@@ -467,7 +473,7 @@ plain_text_source::anchor_for_row(vis_line_t vl)
 {
     std::optional<std::string> retval;
 
-    if (vl > this->tds_lines.size()
+    if (vl > (ssize_t) this->tds_lines.size()
         || this->tds_doc_sections.m_sections_root == nullptr)
     {
         return retval;
@@ -489,13 +495,15 @@ plain_text_source::anchor_for_row(vis_line_t vl)
         return to_anchor_string(path_for_line.back().get<std::string>());
     }
 
-    auto comps = path_for_line | lnav::itertools::map([](const auto& elem) {
-                     return elem.match(
-                         [](const std::string& str) {
-                             return json_ptr::encode_str(str);
-                         },
-                         [](size_t index) { return fmt::to_string(index); });
-                 });
+    auto comps
+        = path_for_line | lnav::itertools::map([](const auto& elem) {
+              return elem.match(
+                  [](const std::string& str) {
+                      stack_buf allocator;
+                      return json_ptr::encode(str, allocator).to_string();
+                  },
+                  [](size_t index) { return fmt::to_string(index); });
+          });
 
     return fmt::format(FMT_STRING("#/{}"),
                        fmt::join(comps.begin(), comps.end(), "/"));
@@ -504,7 +512,7 @@ plain_text_source::anchor_for_row(vis_line_t vl)
 std::optional<vis_line_t>
 plain_text_source::adjacent_anchor(vis_line_t vl, direction dir)
 {
-    if (vl > this->tds_lines.size()
+    if (vl > (ssize_t) this->tds_lines.size()
         || this->tds_doc_sections.m_sections_root == nullptr)
     {
         return std::nullopt;
@@ -514,6 +522,8 @@ plain_text_source::adjacent_anchor(vis_line_t vl, direction dir)
     auto path_for_line = this->tds_doc_sections.path_for_range(
         tl.tl_offset, tl.tl_offset + tl.tl_value.al_string.length());
 
+    log_trace("adjacent_anchor: curr path = %s",
+              fmt::format(FMT_STRING("{}"), path_for_line).c_str());
     const auto& md = this->tds_doc_sections;
     if (path_for_line.empty()) {
         auto neighbors_res = md.m_sections_root->line_neighbors(vl);
@@ -533,7 +543,8 @@ plain_text_source::adjacent_anchor(vis_line_t vl, direction dir)
                 if (neighbors_res->cnr_next) {
                     return this->line_for_offset(
                         neighbors_res->cnr_next.value()->hn_start);
-                } else if (!md.m_sections_root->hn_children.empty()) {
+                }
+                if (!md.m_sections_root->hn_children.empty()) {
                     return this->line_for_offset(
                         md.m_sections_root->hn_children[0]->hn_start);
                 }
@@ -549,9 +560,10 @@ plain_text_source::adjacent_anchor(vis_line_t vl, direction dir)
     auto parent_opt = lnav::document::hier_node::lookup_path(
         md.m_sections_root.get(), path_for_line);
     if (!parent_opt) {
+        log_trace("  no parent");
         return std::nullopt;
     }
-    auto parent = parent_opt.value();
+    const auto* parent = parent_opt.value();
 
     auto child_hn = parent->lookup_child(last_key);
     if (!child_hn) {
@@ -562,6 +574,7 @@ plain_text_source::adjacent_anchor(vis_line_t vl, direction dir)
     auto neighbors_res = parent->child_neighbors(
         child_hn.value(), tl.tl_offset + tl.tl_value.al_string.length() + 1);
     if (!neighbors_res) {
+        log_trace("no neighbors");
         return std::nullopt;
     }
 
@@ -569,6 +582,7 @@ plain_text_source::adjacent_anchor(vis_line_t vl, direction dir)
         auto neighbor_sub
             = neighbors_res->cnr_previous.value()->lookup_child(last_key);
         if (neighbor_sub) {
+            log_trace("  loading previous child");
             neighbors_res->cnr_previous = neighbor_sub;
         }
     }
@@ -577,6 +591,7 @@ plain_text_source::adjacent_anchor(vis_line_t vl, direction dir)
         auto neighbor_sub
             = neighbors_res->cnr_next.value()->lookup_child(last_key);
         if (neighbor_sub) {
+            log_trace("  loading next child");
             neighbors_res->cnr_next = neighbor_sub;
         }
     }
@@ -591,6 +606,8 @@ plain_text_source::adjacent_anchor(vis_line_t vl, direction dir)
         }
         case direction::next: {
             if (neighbors_res->cnr_next) {
+                log_trace("  next offset %d",
+                          neighbors_res->cnr_next.value()->hn_start);
                 return this->line_for_offset(
                     neighbors_res->cnr_next.value()->hn_start);
             }

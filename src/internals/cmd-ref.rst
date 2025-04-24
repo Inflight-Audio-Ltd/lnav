@@ -101,6 +101,17 @@
 ----
 
 
+.. _clear_adjusted_log_time:
+
+:clear-adjusted-log-time
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+  Clear the adjusted time for the focused line in the view
+
+
+----
+
+
 .. _clear_comment:
 
 :clear-comment
@@ -211,7 +222,7 @@
 :comment *text*
 ^^^^^^^^^^^^^^^
 
-  Attach a comment to the focused log line.  The comment will be displayed right below the log message it is associated with. The comment can be formatted using markdown and you can add new-lines with '\n'.
+  Attach a comment to the focused log line.  The comment will be displayed right below the log message it is associated with. The comment can contain Markdown directives for styling and linking.
 
   **Parameters**
     * **text\*** --- The comment text
@@ -336,7 +347,7 @@
 :delete-filter *pattern*
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-  Delete the filter created with [1m:filter-in[0m or [1m:filter-out[0m
+  Delete the filter created with ':filter-in' or ':filter-out'
 
   **Parameters**
     * **pattern\*** --- The regular expression to match
@@ -382,10 +393,10 @@
 :delete-search-table *table-name*
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-  Create an SQL table based on a regex search
+  Delete a search table
 
   **Parameters**
-    * **table-name\*** --- The name of the table to create
+    * **table-name** --- The name of the table to delete
 
   **Examples**
     To delete the search table named 'task_durations':
@@ -1071,7 +1082,7 @@
   Open the given prompt
 
   **Parameters**
-    * **type\*** --- The type of prompt -- command, script, search, sql, user
+    * **type\*** --- The type of prompt
     * **--alt** --- Perform the alternate action for this prompt by default
     * **prompt** --- The prompt to display
     * **initial-value** --- The initial value to fill in for the prompt
@@ -1579,6 +1590,20 @@
 ----
 
 
+.. _write_debug_log_to:
+
+:write-debug-log-to *path*
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  Write lnav's internal debug log to the given path.  This can be useful if the `-d` flag was not passed on the command line
+
+  **Parameters**
+    * **path\*** --- The destination path for the debug log
+
+
+----
+
+
 .. _write_json_to:
 
 :write-json-to *\[--anonymize\]* *path*
@@ -1629,13 +1654,13 @@
 
 .. _write_raw_to:
 
-:write-raw-to *\[--view={log,db}\]* *\[--anonymize\]* *path*
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+:write-raw-to *\[--view\]* *\[--anonymize\]* *path*
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
   In the log view, write the original log file content of the marked messages to the file.  In the DB view, the contents of the cells are written to the output file.
 
   **Parameters**
-    * **--view={log,db}** --- The view to use as the source of data
+    * **--view** --- The view to use as the source of data
     * **--anonymize** --- Anonymize the lines
     * **path\*** --- The path to the file to write
 

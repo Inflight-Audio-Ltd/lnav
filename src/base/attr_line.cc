@@ -37,6 +37,7 @@
 #include "ansi_scrubber.hh"
 #include "auto_mem.hh"
 #include "config.h"
+#include "fts_fuzzy_match.hh"
 #include "intervaltree/IntervalTree.h"
 #include "lnav_log.hh"
 #include "pcrepp/pcre2pp.hh"
@@ -51,16 +52,16 @@ attr_line_t::from_table_cell_content(const string_fragment& content,
     static constexpr auto LF_SYMBOL = "\u240a"sv;
     static constexpr auto CR_SYMBOL = "\u240d"sv;
     static constexpr auto REP_SYMBOL = "\ufffd"sv;
-    static const std::string ELLIPSIS = "\u22ef";
+    static constexpr auto ELLIPSIS = "\u22ef"_frag;
 
     auto has_ansi = false;
     size_t char_width = 0;
     attr_line_t retval;
     std::string_view replacement;
-    size_t copy_start = 0;
+    int copy_start = 0;
 
     retval.al_string.reserve(max_char_width);
-    for (size_t index = 0; index < content.length(); ++index) {
+    for (int index = 0; index < content.length(); ++index) {
         const auto ch = content.udata()[index];
 
         switch (ch) {
@@ -140,7 +141,10 @@ attr_line_t::from_table_cell_content(const string_fragment& content,
             auto copy_len = index - copy_start;
             retval.al_string.append(&content[copy_start], copy_len);
             copy_start = index + 1;
+            auto lr = line_range{(int) retval.al_string.size(), -1};
             retval.al_string.append(replacement);
+            lr.lr_end = retval.al_string.size();
+            retval.al_attrs.emplace_back(lr, VC_ROLE.value(role_t::VCR_HIDDEN));
             replacement = ""sv;
         }
     }
@@ -164,6 +168,9 @@ attr_line_t::from_table_cell_content(const string_fragment& content,
         auto bytes_to_remove = remove_up_to_bytes - bytes_to_keep_at_front;
         retval.erase(bytes_to_keep_at_front, bytes_to_remove);
         retval.insert(bytes_to_keep_at_front, ELLIPSIS);
+        auto lr = line_range{(int) bytes_to_keep_at_front,
+                             (int) bytes_to_keep_at_front + ELLIPSIS.length()};
+        retval.al_attrs.emplace_back(lr, VC_ROLE.value(role_t::VCR_HIDDEN));
     }
 
     return retval;
@@ -191,6 +198,7 @@ attr_line_t&
 attr_line_t::with_ansi_string(const std::string& str)
 {
     this->al_string = str;
+    this->al_attrs.clear();
     scrub_ansi_string(this->al_string, &this->al_attrs);
 
     return *this;
@@ -200,6 +208,7 @@ attr_line_t&
 attr_line_t::with_ansi_string(const string_fragment& str)
 {
     this->al_string = str.to_string();
+    this->al_attrs.clear();
     scrub_ansi_string(this->al_string, &this->al_attrs);
 
     return *this;
@@ -235,6 +244,8 @@ consume(const string_fragment text)
     static const auto SPACE_RE
         = lnav::pcre2pp::code::from_const(R"((*UTF)^\s)");
 
+    require(text.is_valid());
+
     if (text.empty()) {
         return eof{text};
     }
@@ -261,16 +272,8 @@ consume(const string_fragment text)
         return space{split_res.first, split_res.second};
     }
 
-    auto csize_res = ww898::utf::utf8::char_size(
-        [&text]() { return std::make_pair(text.front(), text.length()); });
-
-    if (csize_res.isErr()) {
-        auto split_res = text.split_n(1);
-
-        return corrupt{split_res->first, split_res->second};
-    }
-
-    auto split_res = text.split_n(csize_res.unwrap());
+    auto next_char_byte_index = text.column_to_byte_index(1);
+    auto split_res = text.split_n(next_char_byte_index);
 
     return word{split_res->first, split_res->second};
 }
@@ -305,6 +308,8 @@ attr_line_t::insert(size_t index,
                     const attr_line_t& al,
                     text_wrap_settings* tws)
 {
+    require(!tws || tws->tws_width > 0);
+
     if (index < this->al_string.length()) {
         shift_string_attrs(this->al_attrs, index, al.al_string.length());
     }
@@ -314,7 +319,7 @@ attr_line_t::insert(size_t index,
     for (const auto& sa : al.al_attrs) {
         this->al_attrs.emplace_back(sa);
 
-        line_range& lr = this->al_attrs.back().sa_range;
+        auto& lr = this->al_attrs.back().sa_range;
 
         lr.shift(0, index);
         if (lr.lr_end == -1) {
@@ -326,7 +331,8 @@ attr_line_t::insert(size_t index,
         return *this;
     }
 
-    auto starting_line_index = this->al_string.rfind('\n', index);
+    auto starting_line_index = index == 0 ? std::string::npos
+                                          : this->al_string.rfind('\n', index - 1);
     if (starting_line_index == std::string::npos) {
         starting_line_index = 0;
     } else {
@@ -369,12 +375,20 @@ attr_line_t::insert(size_t index,
         auto pre_iter = find_string_attr_containing(
             this->al_attrs, &SA_PREFORMATTED, text_to_wrap.sf_begin);
         if (pre_iter != this->al_attrs.end()) {
+            require_ge(pre_iter->sa_range.lr_start, text_to_wrap.sf_begin);
             auto pre_len = pre_iter->sa_range.lr_end - text_to_wrap.sf_begin;
             auto pre_lf = text_to_wrap.find('\n');
-            if (pre_lf && pre_lf.value() < pre_len) {
+            if (pre_lf && pre_lf.value() + 1 < pre_len) {
                 pre_len = pre_lf.value() + 1;
+                auto lr_copy = pre_iter->sa_range;
+                const_cast<int&>(pre_iter->sa_range.lr_end)
+                    = pre_iter->sa_range.lr_start + pre_len;
+                this->al_attrs.emplace_back(lr_copy, SA_PREFORMATTED.value());
+                this->al_attrs.back().sa_range.lr_start
+                    = lr_copy.lr_start + pre_len;
             }
 
+            require_ge(text_to_wrap.length(), pre_len);
             auto pre_pair = text_to_wrap.split_n(pre_len);
             next_chunk = text_stream::word{
                 pre_pair->first,
@@ -386,9 +400,8 @@ attr_line_t::insert(size_t index,
         }
 
         text_to_wrap = next_chunk.match(
-            [&](text_stream::word word) {
-                auto ch_count
-                    = word.w_word.utf8_length().unwrapOr(word.w_word.length());
+            [&](const text_stream::word& word) {
+                ssize_t ch_count = word.w_word.column_width();
 
                 if (line_ch_count > line_indent_count && !last_was_pre
                     && (line_ch_count + ch_count) > usable_width)
@@ -412,8 +425,8 @@ attr_line_t::insert(size_t index,
                     auto trailing_space_count = 0;
                     if (!last_word.empty()) {
                         trailing_space_count
-                            = word.w_word.sf_begin - last_word.sf_begin;
-                        this->erase(last_word.sf_begin, trailing_space_count);
+                            = word.w_word.sf_begin - last_word.sf_end;
+                        this->erase(last_word.sf_end, trailing_space_count);
                     }
                     return word.w_remaining
                         .erase_before(this->al_string.data(),
@@ -430,7 +443,7 @@ attr_line_t::insert(size_t index,
 
                 return word.w_remaining;
             },
-            [&](text_stream::space space) {
+            [&](const text_stream::space& space) {
                 if (space.s_value == "\n") {
                     line_ch_count = 0;
                     line_indent_count = 0;
@@ -439,8 +452,7 @@ attr_line_t::insert(size_t index,
                 }
 
                 if (line_ch_count > 0) {
-                    auto ch_count = space.s_value.utf8_length().unwrapOr(
-                        space.s_value.length());
+                    ssize_t ch_count = space.s_value.column_width();
 
                     if ((line_ch_count + ch_count) > usable_width
                         && find_string_attr_containing(this->al_attrs,
@@ -458,15 +470,18 @@ attr_line_t::insert(size_t index,
                         auto trailing_space_count = 0;
                         if (!last_word.empty()) {
                             trailing_space_count
-                                = space.s_value.sf_begin - last_word.sf_begin;
+                                = space.s_value.sf_begin - last_word.sf_end;
                             this->erase(last_word.sf_end, trailing_space_count);
                         }
+                        last_word.clear();
 
-                        return space.s_remaining
-                            .erase_before(
-                                this->al_string.data(),
-                                space.s_value.length() + trailing_space_count)
-                            .prepend(this->al_string.data(), 1);
+                        auto retval
+                            = space.s_remaining
+                                  .erase_before(this->al_string.data(),
+                                                space.s_value.length()
+                                                    + trailing_space_count)
+                                  .prepend(this->al_string.data(), 1);
+                        return retval;
                     }
                     line_ch_count += ch_count;
                 } else if (find_string_attr_containing(this->al_attrs,
@@ -485,7 +500,7 @@ attr_line_t::insert(size_t index,
             [](text_stream::eof eof) { return eof.e_remaining; });
 
         if (next_chunk.is<text_stream::word>()) {
-            last_word = text_to_wrap;
+            last_word = next_chunk.get<text_stream::word>().w_word;
         }
         last_was_pre = (pre_iter != this->al_attrs.end());
 
@@ -620,7 +635,8 @@ attr_line_t::apply_hide()
     auto& sa = this->al_attrs;
 
     for (auto& sattr : sa) {
-        if (sattr.sa_type == &SA_HIDDEN && sattr.sa_range.length() > 1) {
+        if (sattr.sa_type == &SA_HIDDEN) {
+            auto icon = sattr.sa_value.get<ui_icon_t>();
             auto& lr = sattr.sa_range;
 
             std::for_each(sa.begin(), sa.end(), [&](string_attr& attr) {
@@ -632,8 +648,21 @@ attr_line_t::apply_hide()
             this->al_string.replace(lr.lr_start, lr.length(), "\xE2\x8B\xAE");
             shift_string_attrs(sa, lr.lr_start + 1, -(lr.length() - 3));
             sattr.sa_type = &VC_ICON;
-            sattr.sa_value = ui_icon_t::hidden;
+            sattr.sa_value = icon;
             lr.lr_end = lr.lr_start + 3;
+        } else if (sattr.sa_type == &SA_REPLACED) {
+            auto& lr = sattr.sa_range;
+
+            std::for_each(sa.begin(), sa.end(), [&](string_attr& attr) {
+                if (attr.sa_type == &VC_STYLE && lr.contains(attr.sa_range)) {
+                    attr.sa_type = &SA_REMOVED;
+                }
+            });
+
+            this->al_string.erase(lr.lr_start, lr.length());
+            shift_string_attrs(sa, lr.lr_start, -lr.length());
+            sattr.sa_type = &SA_REMOVED;
+            lr.lr_end = lr.lr_start;
         }
     }
 }
@@ -692,7 +721,7 @@ attr_line_t::erase(size_t pos, size_t len)
 attr_line_t&
 attr_line_t::pad_to(ssize_t size)
 {
-    const auto curr_len = this->column_width();
+    const ssize_t curr_len = this->column_width();
 
     if (curr_len < size) {
         this->append((size - curr_len), ' ');
@@ -712,6 +741,37 @@ attr_line_t::column_to_byte_index(size_t column) const
 {
     return string_fragment::from_str(this->al_string)
         .column_to_byte_index(column);
+}
+
+attr_line_t&
+attr_line_t::highlight_fuzzy_matches(const std::string& pattern)
+{
+    if (pattern.empty()) {
+        return *this;
+    }
+
+    constexpr size_t MATCH_COUNT = 256;
+    uint8_t matches[MATCH_COUNT];
+    int score;
+
+    memset(matches, 0, sizeof(matches));
+    if (!fts::fuzzy_match(pattern.c_str(),
+                          this->al_string.c_str(),
+                          score,
+                          matches,
+                          MATCH_COUNT))
+    {
+        return *this;
+    }
+
+    for (auto lpc = size_t{0}; (lpc == 0 || matches[lpc]) && lpc < MATCH_COUNT;
+         lpc++)
+    {
+        auto lr = line_range{matches[lpc], matches[lpc] + 1};
+        this->al_attrs.emplace_back(lr, VC_ROLE.value(role_t::VCR_FUZZY_MATCH));
+    }
+
+    return *this;
 }
 
 line_range

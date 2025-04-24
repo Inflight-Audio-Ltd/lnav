@@ -32,6 +32,7 @@
 #include "log_data_helper.hh"
 
 #include "config.h"
+#include "logfile.hh"
 #include "pugixml/pugixml.hpp"
 #include "sql_util.hh"
 #include "xml_util.hh"
@@ -53,13 +54,12 @@ log_data_helper::clear()
 bool
 log_data_helper::parse_line(content_line_t line, bool allow_middle)
 {
-    logfile::iterator ll;
-    bool retval = false;
+    auto retval = false;
 
     this->ldh_source_line = this->ldh_line_index = line;
 
     this->ldh_file = this->ldh_log_source.find(this->ldh_line_index);
-    ll = this->ldh_file->begin() + this->ldh_line_index;
+    auto ll = this->ldh_file->begin() + this->ldh_line_index;
     this->ldh_y_offset = 0;
     while (allow_middle && ll->is_continued()) {
         --ll;
@@ -67,7 +67,6 @@ log_data_helper::parse_line(content_line_t line, bool allow_middle)
     }
     this->ldh_line = ll;
     if (!ll->is_message()) {
-        log_warning("failed to parse line %d", line);
         this->ldh_parser.reset();
         this->ldh_scanner.reset();
         this->ldh_namer.reset();
@@ -122,7 +121,9 @@ log_data_helper::parse_line(content_line_t line, bool allow_middle)
             if (ldh_line_value.lv_meta.lvm_column
                     .is<logline_value_meta::external_column>())
             {
-                char buf[ldh_line_value.lv_meta.lvm_name.size() + 2];
+                stack_buf allocator;
+                auto* buf = allocator.allocate(
+                    ldh_line_value.lv_meta.lvm_name.size() + 2);
 
                 auto rc = fmt::format_to(
                     buf, FMT_STRING("/{}"), ldh_line_value.lv_meta.lvm_name);

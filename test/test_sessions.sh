@@ -6,6 +6,23 @@ unset XDG_CONFIG_HOME
 rm -rf "./sessions"
 mkdir -p $HOME
 
+cat ${test_dir}/logfile_access_log.0 | run_cap_test ${lnav_test} -n \
+    -c ":filter-out vmk" \
+    -c ":export-session-to exported-stdin-session.0.lnav"
+
+# run_cap_test cat exported-stdin-session.0.lnav
+
+run_cap_test ${lnav_test} -nN \
+    -c "|exported-stdin-session.0.lnav"
+
+run_cap_test ${lnav_test} -n \
+    -e "cat ${test_dir}/logfile_access_log.0" \
+    -c ":filter-out vmk" \
+    -c ":export-session-to exported-sh-session.0.lnav"
+
+run_cap_test ${lnav_test} -nN \
+    -c "|exported-sh-session.0.lnav"
+
 run_cap_test ${lnav_test} -n \
     -c ":reset-session" \
     -c ":goto 0" \
@@ -97,6 +114,11 @@ run_cap_test ${lnav_test} -nq \
 run_cap_test ${lnav_test} -n \
     -c ":load-session" \
     -c ":test-comment adjust time in session" \
+    ${test_dir}/logfile_access_log.0
+
+run_cap_test ${lnav_test} -n \
+    -c ":load-session" \
+    -c ":clear-adjusted-log-time" \
     ${test_dir}/logfile_access_log.0
 
 run_cap_test ${lnav_test} -n \

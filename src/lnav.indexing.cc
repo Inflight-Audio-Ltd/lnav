@@ -27,6 +27,8 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <unordered_map>
+
 #include "lnav.indexing.hh"
 
 #include "bound_tags.hh"
@@ -35,6 +37,7 @@
 #include "service_tags.hh"
 #include "session_data.hh"
 #include "sql_util.hh"
+#include "yajlpp/yajlpp_def.hh"
 
 using namespace std::chrono_literals;
 using namespace lnav::roles::literals;
@@ -46,18 +49,18 @@ class loading_observer : public logfile_observer {
 public:
     loading_observer() : lo_last_offset(0) {}
 
-    indexing_result logfile_indexing(const logfile* lf,
-                                     file_off_t off,
-                                     file_size_t total) override
+    lnav::progress_result_t logfile_indexing(const logfile* lf,
+                                             file_off_t off,
+                                             file_ssize_t total) override
     {
         static sig_atomic_t index_counter = 0;
 
         if (lnav_data.ld_window == nullptr) {
-            return indexing_result::CONTINUE;
+            return lnav::progress_result_t::ok;
         }
 
         if (lnav_data.ld_sigint_count.load() > 0) {
-            return indexing_result::BREAK;
+            return lnav::progress_result_t::interrupt;
         }
 
         /* XXX require(off <= total); */
@@ -65,7 +68,8 @@ public:
             off = total;
         }
 
-        if ((((size_t) off == total) && (this->lo_last_offset != off))
+        auto retval = lnav::progress_result_t::ok;
+        if (((off == total) && (this->lo_last_offset != off))
             || ui_periodic_timer::singleton().time_to_update(index_counter))
         {
             if (off == total) {
@@ -73,26 +77,29 @@ public:
             } else {
                 lnav_data.ld_bottom_source.update_loading(off, total);
             }
-            do_observer_update(lf);
+            lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
+            if (do_observer_update(lf) == lnav::progress_result_t::interrupt) {
+                retval = lnav::progress_result_t::interrupt;
+            }
             this->lo_last_offset = off;
         }
 
         if (!lnav_data.ld_looping) {
-            return indexing_result::BREAK;
+            retval = lnav::progress_result_t::interrupt;
         }
-        return indexing_result::CONTINUE;
+        return retval;
     }
 
     off_t lo_last_offset;
 };
 
-void
+lnav::progress_result_t
 do_observer_update(const logfile* lf)
 {
     if (lf != nullptr && lnav_data.ld_mode == ln_mode_t::FILES
         && lnav_data.ld_exec_phase < lnav_exec_phase::INTERACTIVE)
     {
-        auto& fc = lnav_data.ld_active_files;
+        const auto& fc = lnav_data.ld_active_files;
         size_t index = 0;
 
         for (const auto& curr_file : fc.fc_files) {
@@ -106,11 +113,7 @@ do_observer_update(const logfile* lf)
             lnav_data.ld_files_view.do_update();
         }
     }
-    if (handle_winch(nullptr)) {
-        layout_views();
-        lnav_data.ld_view_stack.do_update();
-    }
-    lnav_data.ld_status_refresher();
+    return lnav_data.ld_status_refresher(lnav::func::op_type::interactive);
 }
 
 void
@@ -140,8 +143,8 @@ public:
         auto& ftf = lnav_data.ld_files_to_front;
 
         ftf.remove_if([&lf](const auto& elem) {
-            return elem.first == lf->get_filename()
-                || elem.first == lf->get_open_options().loo_filename;
+            return elem == lf->get_filename()
+                || elem == lf->get_open_options().loo_filename;
         });
         if (lnav_data.ld_log_source.insert_file(lf)) {
             this->did_promotion = true;
@@ -155,6 +158,10 @@ public:
                 if (vt != nullptr) {
                     lnav_data.ld_vtab_manager->register_vtab(vt);
                 }
+            }
+            if (lf->get_open_options().loo_source == logfile_name_source::USER)
+            {
+                lf->set_include_in_session(true);
             }
 
             auto iter = session_data.sd_file_states.find(lf->get_filename());
@@ -182,11 +189,11 @@ public:
         const auto& ftf = lnav_data.ld_files_to_front;
 
         if (!ftf.empty()
-            && (ftf.front().first == lf->get_filename()
-                || ftf.front().first == lf->get_open_options().loo_filename))
+            && (ftf.front() == lf->get_filename()
+                || ftf.front() == lf->get_open_options().loo_filename))
         {
             this->front_file = lf;
-            this->front_top = lnav_data.ld_files_to_front.front().second;
+            this->front_top = lf->get_open_options().loo_init_location;
 
             lnav_data.ld_files_to_front.pop_front();
         }
@@ -252,26 +259,45 @@ rebuild_indexes(std::optional<ui_clock::time_point> deadline)
             }
 
             std::optional<vis_line_t> new_top_opt;
-            cb.front_top.match(
-                [&new_top_opt](vis_line_t vl) {
-                    log_info("file open request to jump to line: %d", (int) vl);
-                    if (vl < 0_vl) {
-                        vl += lnav_data.ld_views[LNV_TEXT].get_inner_height();
-                    }
-                    if (vl < lnav_data.ld_views[LNV_TEXT].get_inner_height()) {
-                        new_top_opt = vl;
-                    }
-                },
-                [&new_top_opt](const std::string& loc) {
-                    log_info("file open request to jump to anchor: %s",
-                             loc.c_str());
-                    auto* ta = dynamic_cast<text_anchors*>(
-                        lnav_data.ld_views[LNV_TEXT].get_sub_source());
+            if (cb.front_top.valid()) {
+                cb.front_top.match(
+                    [&new_top_opt, &cb](file_location_tail tail) {
+                        switch (cb.front_file->get_text_format()) {
+                            case text_format_t::TF_UNKNOWN:
+                            case text_format_t::TF_LOG:
+                                log_info("file open request to tail");
+                                break;
+                            default:
+                                log_info("file open is %s, moving to top",
+                                         fmt::to_string(
+                                             cb.front_file->get_text_format())
+                                             .c_str());
+                                new_top_opt = 0_vl;
+                                break;
+                        }
+                    },
+                    [&new_top_opt](int vl) {
+                        log_info("file open request to jump to line: %d", vl);
+                        if (vl < 0) {
+                            vl += lnav_data.ld_views[LNV_TEXT]
+                                      .get_inner_height();
+                        }
+                        if (vl
+                            < lnav_data.ld_views[LNV_TEXT].get_inner_height()) {
+                            new_top_opt = vis_line_t(vl);
+                        }
+                    },
+                    [&new_top_opt](const std::string& loc) {
+                        log_info("file open request to jump to anchor: %s",
+                                 loc.c_str());
+                        auto* ta = dynamic_cast<text_anchors*>(
+                            lnav_data.ld_views[LNV_TEXT].get_sub_source());
 
-                    if (ta != nullptr) {
-                        new_top_opt = ta->row_for_anchor(loc);
-                    }
-                });
+                        if (ta != nullptr) {
+                            new_top_opt = ta->row_for_anchor(loc);
+                        }
+                    });
+            }
             if (new_top_opt) {
                 log_info("  setting requested top line: %d",
                          (int) new_top_opt.value());
@@ -281,7 +307,7 @@ rebuild_indexes(std::optional<ui_clock::time_point> deadline)
                          (int) text_view.get_selection());
                 scroll_downs[LNV_TEXT] = false;
             } else {
-                log_warning("could not jump to requested line");
+                log_info("no line requested");
             }
         }
         if (cb.did_promotion && deadline) {
@@ -295,10 +321,13 @@ rebuild_indexes(std::optional<ui_clock::time_point> deadline)
     std::vector<std::shared_ptr<logfile>> closed_files;
     for (auto& lf : lnav_data.ld_active_files.fc_files) {
         if (!lf->exists() || lf->is_closed()) {
-            log_info("closed log file: %s", lf->get_filename().c_str());
+            log_info("%s file: %s",
+                     !lf->exists() ? "deleted" : "closed",
+                     lf->get_filename().c_str());
             lnav_data.ld_text_source.remove(lf);
             lnav_data.ld_log_source.remove_file(lf);
             closed_files.emplace_back(lf);
+            retval.rir_rescan_needed = true;
         }
     }
     if (!closed_files.empty()) {
@@ -421,7 +450,7 @@ update_active_files(file_collection& new_files)
         return true;
     }
 
-    bool was_below_open_file_limit
+    const auto was_below_open_file_limit
         = lnav_data.ld_active_files.is_below_open_file_limit();
 
     for (const auto& lf : new_files.fc_files) {
@@ -517,7 +546,7 @@ rescan_files(bool req)
         if (!done && !(lnav_data.ld_flags & LNF_HEADLESS)) {
             lnav_data.ld_files_view.set_needs_update();
             lnav_data.ld_files_view.do_update();
-            lnav_data.ld_status_refresher();
+            lnav_data.ld_status_refresher(lnav::func::op_type::interactive);
         }
     } while (!done && lnav_data.ld_looping);
     return true;

@@ -80,14 +80,14 @@ set(TIME_FORMATS
         "%Y %b %d %a %H:%M:%S.%L"
         "%Y %b %d %H:%M:%S.%L"
         "%Y %b %d %H:%M:%S"
-        "%a %b %d %H:%M:%S %Y"
-        "%a %b %d %H:%M:%S.%f %Y"
-        "%a %b %d %H:%M:%S:%f %Y"
-        "%a %b %d %H:%M:%S %Z %Y"
-        "%a %b %d %I:%M:%S %p %Z %Y"
-        "%a %b %d %H:%M:%S "
-        "%a %b %d %H:%M:%S.%L "
-        "%a %b %d %H:%M "
+        "%a %b %e %H:%M:%S %Y"
+        "%a %b %e %H:%M:%S.%f %Y"
+        "%a %b %e %H:%M:%S:%f %Y"
+        "%a %b %e %H:%M:%S %Z %Y"
+        "%a %b %e %I:%M:%S %p %Z %Y"
+        "%a %b %e %H:%M:%S "
+        "%a %b %e %H:%M:%S.%L "
+        "%a %b %e %H:%M "
         "%a %b %e %H:%M:%S %Z %Y"
         "%d/%m/%y %H:%M:%S"
         "%d/%b/%Y:%H:%M:%S %z"
@@ -156,7 +156,7 @@ function(bin2c)
             DEPENDS bin2c "${FILE_TO_LINK}")
 endfunction(bin2c)
 
-foreach (FILE_TO_LINK animals.json ansi-palette.json css-color-names.json diseases.json emojis.json xml-entities.json xterm-palette.json help.txt help.md init.sql words.json)
+foreach (FILE_TO_LINK animals.json ansi-palette.json css-color-names.json diseases.json emojis.json xml-entities.json xterm-palette.json help.md init.sql words.json)
     string(REPLACE "." "-" DST_FILE "${FILE_TO_LINK}")
     add_custom_command(
             OUTPUT "${DST_FILE}.h" "${DST_FILE}.cc"
@@ -252,8 +252,9 @@ set(CONFIG_FILES
         keymaps/uk-keymap.json
         keymaps/us-keymap.json
         themes/default-theme.json
-        themes/grayscale.json
+        themes/dracula.json
         themes/eldar.json
+        themes/grayscale.json
         themes/monocai.json
         themes/night-owl.json
         themes/solarized-dark.json
@@ -462,6 +463,7 @@ add_library(
         elem_to_json.cc
         environ_vtab.cc
         extension-functions.cc
+        external_editor.cc
         external_opener.cc
         field_overlay_source.cc
         file_collection.cc
@@ -475,7 +477,6 @@ add_library(
         filter_sub_source.cc
         fs-extension-functions.cc
         fstat_vtab.cc
-        fts_fuzzy_match.cc
         help_text.cc
         help_text_formatter.cc
         highlighter.cc
@@ -488,6 +489,7 @@ add_library(
         lnav.indexing.cc
         lnav.management_cli.cc
         lnav.prompt.cc
+        lnav.script.parser.cc
         lnav_commands.cc
         lnav_config.cc
         lnav_util.cc
@@ -504,6 +506,7 @@ add_library(
         logfile_sub_source.cc
         md2attr_line.cc
         md4cpp.cc
+        msg.text.cc
         network-extension-functions.cc
         data_scanner.cc
         data_scanner_re.cc
@@ -513,6 +516,7 @@ add_library(
         piper.match.cc
         plain_text_source.cc
         pretty_printer.cc
+        preview_status_source.cc
         pugixml/pugixml.cpp
         readline_callbacks.cc
         readline_highlighters.cc
@@ -532,6 +536,7 @@ add_library(
         sysclip.cc
         spectro_impls.cc
         spectro_source.cc
+        sql.formatter.cc
         sql_commands.cc
         sql_util.cc
         sqlitepp.cc
@@ -585,6 +590,8 @@ add_library(
         doc_status_source.hh
         dump_internals.hh
         elem_to_json.hh
+        external_editor.hh
+        external_editor.cfg.hh
         external_opener.hh
         external_opener.cfg.hh
         field_overlay_source.hh
@@ -596,8 +603,8 @@ add_library(
         filter_observer.hh
         filter_status_source.hh
         filter_sub_source.hh
+        format.scripts.hh
         fstat_vtab.hh
-        fts_fuzzy_match.hh
         grep_highlighter.hh
         hasher.hh
         help_text.hh
@@ -610,6 +617,8 @@ add_library(
         lnav.events.hh
         lnav.indexing.hh
         lnav.management_cli.hh
+        lnav.prompt.hh
+        lnav.script.parser.hh
         lnav_config.hh
         lnav_config_fwd.hh
         lnav_util.hh
@@ -632,6 +641,7 @@ add_library(
         logfile_stats.hh
         md2attr_line.hh
         md4cpp.hh
+        msg.text.hh
         file_converter_manager.hh
         piper.looper.cfg.hh
         piper.looper.hh
@@ -660,6 +670,7 @@ add_library(
         spectro_impls.hh
         spectro_source.hh
         sqlitepp.hh
+        sql.formatter.hh
         sql_execute.hh
         sql_help.hh
         sql_util.hh
@@ -741,6 +752,21 @@ add_library(
 
         third-party/prqlc-c/prqlc.cxx.hh
         third-party/prqlc-c/prqlc.cxx.cc
+
+        third-party/tlx/die/core.hpp
+        third-party/tlx/container/btree.hpp
+        third-party/tlx/container/btree_map.hpp
+        third-party/tlx/container/btree_multimap.hpp
+        third-party/tlx/container/btree_multiset.hpp
+        third-party/tlx/container/btree_set.hpp
+
+        third-party/hat-trie/include/tsl/htrie_set.h
+        third-party/hat-trie/include/tsl/htrie_hash.h
+        third-party/hat-trie/include/tsl/htrie_map.h
+        third-party/hat-trie/include/tsl/array-hash/array_map.h
+        third-party/hat-trie/include/tsl/array-hash/array_hash.h
+        third-party/hat-trie/include/tsl/array-hash/array_growth_policy.h
+        third-party/hat-trie/include/tsl/array-hash/array_set.h
 )
 
 set(lnav_SRCS lnav.cc)
@@ -751,6 +777,7 @@ target_include_directories(diag PUBLIC . fmtlib ${CMAKE_CURRENT_BINARY_DIR}
         third-party/date/include
         third-party/prqlc-c
         third-party/rapidyaml
+        third-party/hat-trie/include
         ${CURSES_INCLUDE_DIRS}
 )
 target_compile_options(diag PRIVATE ${CURSES_CFLAGS})

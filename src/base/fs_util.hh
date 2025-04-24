@@ -41,11 +41,16 @@
 #include <unistd.h>
 
 #include "auto_fd.hh"
+#include "fmt/format.h"
 #include "intern_string.hh"
 #include "result.h"
 
-namespace lnav {
-namespace filesystem {
+struct file_location_tail {};
+
+using file_location_t
+    = mapbox::util::variant<file_location_tail, int, std::string>;
+
+namespace lnav::filesystem {
 
 inline bool
 is_glob(const std::string& fn)
@@ -55,7 +60,16 @@ is_glob(const std::string& fn)
             || fn.find('[') != std::string::npos);
 }
 
-std::string escape_path(const std::filesystem::path& p);
+enum class path_type {
+    normal,
+    pattern,
+};
+
+std::string escape_path(const std::filesystem::path& p,
+                        path_type pt = path_type::normal);
+
+std::pair<std::string, file_location_t> split_file_location(
+    const std::string& path);
 
 inline int
 statp(const std::filesystem::path& path, struct stat* buf)
@@ -75,11 +89,9 @@ openp(const std::filesystem::path& path, int flags, mode_t mode)
     return open(path.c_str(), flags, mode);
 }
 
-std::optional<std::filesystem::path>
-self_path();
+std::optional<std::filesystem::path> self_path();
 
-time_t
-self_mtime();
+time_t self_mtime();
 
 Result<std::filesystem::path, std::string> realpath(
     const std::filesystem::path& path);
@@ -162,15 +174,12 @@ public:
     auto_fd lh_fd;
 };
 
-}  // namespace filesystem
-}  // namespace lnav
+}  // namespace lnav::filesystem
 
-namespace fmt {
 template<>
-struct formatter<std::filesystem::path> : formatter<string_view> {
+struct fmt::formatter<std::filesystem::path> : formatter<string_view> {
     auto format(const std::filesystem::path& p, format_context& ctx)
         -> decltype(ctx.out()) const;
 };
-}  // namespace fmt
 
 #endif

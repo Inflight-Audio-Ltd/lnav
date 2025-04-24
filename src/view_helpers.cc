@@ -39,6 +39,7 @@
 #include "document.sections.hh"
 #include "environ_vtab.hh"
 #include "filter_sub_source.hh"
+#include "hasher.hh"
 #include "help-md.h"
 #include "intervaltree/IntervalTree.h"
 #include "lnav.hh"
@@ -154,16 +155,19 @@ open_schema_view()
     schema_tc->redo_search();
 }
 
-static void
+static bool
 open_timeline_view()
 {
     auto* timeline_tc = &lnav_data.ld_views[LNV_TIMELINE];
     auto* timeline_src
         = dynamic_cast<timeline_source*>(timeline_tc->get_sub_source());
 
-    timeline_src->rebuild_indexes();
+    if (!timeline_src->rebuild_indexes()) {
+        return false;
+    }
     timeline_tc->reload_data();
     timeline_tc->redo_search();
+    return true;
 }
 
 class pretty_sub_source : public plain_text_source {
@@ -380,26 +384,46 @@ open_pretty_view()
 
         for (auto vl = log_tc->get_top(); vl <= log_tc->get_bottom(); ++vl) {
             auto cl = lss.at(vl);
-            auto lf = lss.find(cl);
+            auto lf = lss.find_file_ptr(cl);
             auto ll = lf->begin() + cl;
-            shared_buffer_ref sbr;
 
             if (line_count > 0_vl && !ll->is_message()) {
                 continue;
             }
-            auto ll_start = lf->message_start(ll);
-            attr_line_t al;
-
             if (vl == log_tc->get_selection()) {
                 pretty_selected_line = line_count;
             }
+            auto flags = text_sub_source::RF_FULL | text_sub_source::RF_REWRITE;
+            if (line_count == 0_vl) {
+                auto ll_start = lf->message_start(ll);
 
-            vl -= vis_line_t(std::distance(ll_start, ll));
-            lss.text_value_for_line(
-                *log_tc,
-                vl,
-                al.get_string(),
-                text_sub_source::RF_FULL | text_sub_source::RF_REWRITE);
+                while (ll_start != ll) {
+                    if (vl <= 0_vl) {
+                        flags = 0;
+                        break;
+                    }
+                    vl -= 1_vl;
+                    auto prev_cl = lss.at(vl);
+                    auto prev_lf = lss.find_file_ptr(prev_cl);
+                    auto prev_ll = lf->begin() + prev_cl;
+                    if (prev_lf != lf) {
+                        flags = 0;
+                        break;
+                    }
+                    if (prev_ll->is_message()) {
+                        flags = 0;
+                        break;
+                    }
+                    if (prev_ll == ll_start) {
+                        flags = 0;
+                        break;
+                    }
+                }
+            } else if (ll->is_continued()) {
+                flags = 0;
+            }
+            attr_line_t al;
+            lss.text_value_for_line(*log_tc, vl, al.get_string(), flags);
             lss.text_attrs_for_line(*log_tc, vl, al.get_attrs());
             {
                 const auto orig_lr
@@ -553,11 +577,11 @@ open_pretty_view()
     pts->replace_with_mutable(full_text,
                               top_tc->get_sub_source()->get_text_format());
     pretty_tc->set_sub_source(pts);
-    if (lnav_data.ld_last_pretty_print_top != log_tc->get_top()) {
+    if (lnav_data.ld_last_pretty_print_top != top_tc->get_top()) {
         pretty_tc->set_top(0_vl);
     }
     pretty_tc->set_selection(pretty_selected_line.value_or(0_vl));
-    lnav_data.ld_last_pretty_print_top = log_tc->get_top();
+    lnav_data.ld_last_pretty_print_top = top_tc->get_top();
     pretty_tc->redo_search();
 }
 
@@ -641,11 +665,15 @@ build_all_help_text()
 bool
 handle_winch(screen_curses* sc)
 {
+    static auto* breadcrumb_view = injector::get<breadcrumb_curses*>();
+    static auto& prompt = lnav::prompt::get();
+
     if (!lnav_data.ld_winched) {
         return false;
     }
 
     if (sc) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &sc->sc_termios);
         notcurses_refresh(sc->get_notcurses(), nullptr, nullptr);
         notcurses_render(sc->get_notcurses());
         notcurses_refresh(sc->get_notcurses(), nullptr, nullptr);
@@ -654,7 +682,10 @@ handle_winch(screen_curses* sc)
     lnav_data.ld_winched = false;
     for (auto& stat : lnav_data.ld_status) {
         stat.window_change();
+        stat.set_needs_update();
     }
+    breadcrumb_view->set_needs_update();
+    prompt.p_editor.set_needs_update();
     lnav_data.ld_view_stack.set_needs_update();
     lnav_data.ld_doc_view.set_needs_update();
     lnav_data.ld_example_view.set_needs_update();
@@ -716,7 +747,7 @@ layout_views()
 
     int preview_height0 = lnav_data.ld_preview_hidden
         ? 0
-        : lnav_data.ld_preview_view[0].get_inner_height();
+        : std::min(10_vl, lnav_data.ld_preview_view[0].get_inner_height());
     if (!lnav_data.ld_preview_hidden
         && lnav_data.ld_preview_view[0].get_overlay_source() != nullptr)
     {
@@ -760,6 +791,8 @@ layout_views()
     switch (lnav_data.ld_mode) {
         case ln_mode_t::FILES:
         case ln_mode_t::FILTER:
+        case ln_mode_t::SEARCH_FILES:
+        case ln_mode_t::SEARCH_FILTERS:
             filter_height = 5;
             break;
         case ln_mode_t::FILE_DETAILS:
@@ -772,11 +805,10 @@ layout_views()
 
     bool breadcrumb_open = (lnav_data.ld_mode == ln_mode_t::BREADCRUMBS);
 
-    auto bottom_min = std::min(2U + 3U, height);
-    auto bottom = clamped<int>::from(height, bottom_min, height);
-
-    auto prompt_height = prompt.p_editor.vc_enabled ? prompt.p_editor.tc_height
-                                                    : 1;
+    auto prompt_height
+        = prompt.p_editor.is_enabled() ? prompt.p_editor.tc_height : 1;
+    auto min_height = std::min(1U + 10 + 2U, height);
+    auto bottom = clamped<int>::from(height, min_height, height);
 
     bottom -= prompt_height;
     prompt.p_editor.set_y(bottom);
@@ -785,9 +817,7 @@ layout_views()
 
     breadcrumb_view->set_width(width);
 
-    bool vis;
-
-    vis = bottom.try_consume(um_height);
+    auto vis = bottom.try_consume(um_height);
     lnav_data.ld_user_message_view.set_y(bottom);
     lnav_data.ld_user_message_view.set_visible(vis);
 
@@ -915,20 +945,33 @@ layout_views()
 void
 update_hits(textview_curses* tc)
 {
+    static sig_atomic_t counter = 0;
+    static auto& timer = ui_periodic_timer::singleton();
+
 #if 0
     if (isendwin()) {
         return;
     }
 #endif
 
+    if (!timer.time_to_update(counter)
+        && lnav_data.ld_mode != ln_mode_t::SEARCH)
+    {
+        return;
+    }
+
     auto top_tc = lnav_data.ld_view_stack.top();
 
     if (top_tc && tc == *top_tc) {
-        lnav_data.ld_bottom_source.update_hits(tc);
+        if (lnav_data.ld_bottom_source.update_hits(tc)) {
+            lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
+        }
 
         if (lnav_data.ld_mode == ln_mode_t::SEARCH) {
             constexpr auto MAX_MATCH_COUNT = 10_vl;
-            const auto PREVIEW_SIZE = MAX_MATCH_COUNT + 1_vl;
+            constexpr auto PREVIEW_SIZE = MAX_MATCH_COUNT + 1_vl;
+
+            static hasher::array_t last_preview_hash;
 
             int preview_count = 0;
             auto& bm = tc->get_bookmarks();
@@ -937,11 +980,8 @@ update_hits(textview_curses* tc)
             unsigned long width;
             vis_line_t height;
             attr_line_t all_matches;
-            char linebuf[64];
             int last_line = tc->get_inner_height();
-
-            snprintf(linebuf, sizeof(linebuf), "%d", last_line);
-            auto max_line_width = static_cast<int>(strlen(linebuf));
+            auto max_line_width = count_digits(last_line);
 
             tc->get_dimensions(height, width);
             vl += height;
@@ -962,12 +1002,11 @@ update_hits(textview_curses* tc)
                     attr_line_t al;
 
                     tc->textview_value_for_row(prev_vl.value(), al);
-                    snprintf(linebuf,
-                             sizeof(linebuf),
-                             "L%*d: ",
-                             max_line_width,
-                             (int) prev_vl.value());
-                    all_matches.append(linebuf).append(al);
+                    all_matches
+                        .appendf(FMT_STRING("L{:{}}"),
+                                 (int) prev_vl.value(),
+                                 max_line_width)
+                        .append(al);
                     preview_count += 1;
                 }
             }
@@ -990,25 +1029,29 @@ update_hits(textview_curses* tc)
                 if (preview_count > 0) {
                     all_matches.append("\n");
                 }
-                snprintf(linebuf,
-                         sizeof(linebuf),
-                         "L%*d: ",
-                         max_line_width,
-                         (int) vl);
-                all_matches.append(linebuf).append(al);
+                all_matches
+                    .appendf(FMT_STRING("L{:{}}"), (int) vl, max_line_width)
+                    .append(al);
                 preview_count += 1;
             }
 
-            if (preview_count > 0) {
+            auto match_hash = hasher().update(all_matches.al_string).to_array();
+            if (preview_count > 0
+                && (match_hash != last_preview_hash
+                    || lnav_data.ld_preview_view[0].get_sub_source()
+                        == nullptr))
+            {
+                log_debug("updating search preview");
                 lnav_data.ld_preview_status_source[0]
                     .get_description()
                     .set_value("Matching lines for search");
+                lnav_data.ld_status[LNS_PREVIEW0].set_needs_update();
                 lnav_data.ld_preview_view[0].set_sub_source(
                     &lnav_data.ld_preview_source[0]);
                 lnav_data.ld_preview_source[0]
                     .replace_with(all_matches)
                     .set_text_format(text_format_t::TF_UNKNOWN);
-                lnav_data.ld_preview_view[0].set_needs_update();
+                last_preview_hash = match_hash;
             }
         }
     }
@@ -1131,8 +1174,26 @@ eval_example(const help_text& ht, const help_example& ex)
 bool
 toggle_view(textview_curses* toggle_tc)
 {
-    textview_curses* tc = lnav_data.ld_view_stack.top().value_or(nullptr);
-    bool retval = false;
+    auto* tc = lnav_data.ld_view_stack.top().value_or(nullptr);
+    auto retval = false;
+
+    switch (lnav_data.ld_mode) {
+        case ln_mode_t::SQL:
+        case ln_mode_t::COMMAND:
+        case ln_mode_t::EXEC:
+        case ln_mode_t::USER:
+        case ln_mode_t::SEARCH:
+        case ln_mode_t::SEARCH_FILES:
+        case ln_mode_t::SEARCH_FILTERS:
+        case ln_mode_t::SEARCH_SPECTRO_DETAILS: {
+            log_debug("blocking toggle of view while in mode %s",
+                      lnav_mode_strings[lnav::enums::to_underlying(
+                          lnav_data.ld_mode)]);
+            return false;
+        }
+        default:
+            break;
+    }
 
     require(toggle_tc != nullptr);
     require(toggle_tc >= &lnav_data.ld_views[0]);
@@ -1144,6 +1205,8 @@ toggle_view(textview_curses* toggle_tc)
     lnav_data.ld_preview_status_source[0].get_description().clear();
     lnav_data.ld_preview_view[1].set_sub_source(nullptr);
     lnav_data.ld_preview_status_source[1].get_description().clear();
+    lnav_data.ld_status[LNS_PREVIEW0].set_needs_update();
+    lnav_data.ld_status[LNS_PREVIEW1].set_needs_update();
 
     if (tc == toggle_tc) {
         if (lnav_data.ld_view_stack.size() == 1) {
@@ -1170,14 +1233,19 @@ toggle_view(textview_curses* toggle_tc)
         } else if (toggle_tc == &lnav_data.ld_views[LNV_PRETTY]) {
             open_pretty_view();
         } else if (toggle_tc == &lnav_data.ld_views[LNV_TIMELINE]) {
-            open_timeline_view();
+            if (!open_timeline_view()) {
+                auto al = attr_line_t().append(
+                    "interrupted while opening timeline view"_warning);
+                lnav::prompt::get().p_editor.set_inactive_value(al);
+                return false;
+            }
         } else if (toggle_tc == &lnav_data.ld_views[LNV_HISTOGRAM]) {
             // Rebuild to reflect changes in marks.
             rebuild_hist();
         } else if (toggle_tc == &lnav_data.ld_views[LNV_HELP]) {
             build_all_help_text();
-            lnav::prompt::get().p_editor.tc_alt_value
-                = HELP_MSG_1(q, "to return to the previous view");
+            lnav::prompt::get().p_editor.set_alt_value(
+                HELP_MSG_1(q, "to return to the previous view"));
         }
         lnav_data.ld_last_view = nullptr;
         lnav_data.ld_view_stack.push_back(toggle_tc);
@@ -1197,7 +1265,7 @@ bool
 ensure_view(textview_curses* expected_tc)
 {
     auto* tc = lnav_data.ld_view_stack.top().value_or(nullptr);
-    bool retval = true;
+    auto retval = true;
 
     if (tc != expected_tc) {
         toggle_view(expected_tc);
@@ -1224,7 +1292,7 @@ next_cluster(std::optional<vis_line_t> (bookmark_vector<vis_line_t>::*f)(
     auto* tc = get_textview_for_mode(lnav_data.ld_mode);
     auto& bm = tc->get_bookmarks();
     auto& bv = bm[bt];
-    bool top_is_marked = binary_search(bv.begin(), bv.end(), top);
+    bool top_is_marked = bv.bv_tree.exists(top);
     vis_line_t last_top(top), tc_height;
     std::optional<vis_line_t> new_top = top;
     unsigned long tc_width;
@@ -1271,7 +1339,7 @@ moveto_cluster(std::optional<vis_line_t> (bookmark_vector<vis_line_t>::*f)(
                const bookmark_type_t* bt,
                vis_line_t top)
 {
-    textview_curses* tc = get_textview_for_mode(lnav_data.ld_mode);
+    auto* tc = get_textview_for_mode(lnav_data.ld_mode);
     auto new_top = next_cluster(f, bt, top);
 
     if (!new_top) {
@@ -1363,20 +1431,20 @@ hist_index_delegate::index_line(logfile_sub_source& lss,
         case LEVEL_FATAL:
         case LEVEL_CRITICAL:
         case LEVEL_ERROR:
-            ht = hist_source2::HT_ERROR;
+            ht = hist_source2::hist_type_t::HT_ERROR;
             break;
         case LEVEL_WARNING:
-            ht = hist_source2::HT_WARNING;
+            ht = hist_source2::hist_type_t::HT_WARNING;
             break;
         default:
-            ht = hist_source2::HT_NORMAL;
+            ht = hist_source2::hist_type_t::HT_NORMAL;
             break;
     }
 
     this->hid_source.add_value(ll->get_time<std::chrono::microseconds>(), ht);
     if (ll->is_marked() || ll->is_expr_marked()) {
         this->hid_source.add_value(ll->get_time<std::chrono::microseconds>(),
-                                   hist_source2::HT_MARK);
+                                   hist_source2::hist_type_t::HT_MARK);
     }
 }
 
@@ -1454,10 +1522,11 @@ lnav_crumb_source()
 
     auto* top_view = top_view_opt.value();
     auto view_index = top_view - lnav_data.ld_views;
+    auto view_str
+        = fmt::format(FMT_STRING(" {} \u25bc "), lnav_view_titles[view_index]);
     retval.emplace_back(
         lnav_view_titles[view_index],
-        attr_line_t().append(lnav::roles::status_title(
-            fmt::format(FMT_STRING(" {} "), lnav_view_titles[view_index]))),
+        attr_line_t().append(lnav::roles::status_title(view_str)),
         view_title_poss,
         view_performer);
 
@@ -1499,6 +1568,25 @@ set_view_mode(ln_mode_t mode)
             lnav_data.ld_view_stack.set_needs_update();
             break;
         }
+        case ln_mode_t::SQL:
+        case ln_mode_t::EXEC:
+        case ln_mode_t::USER:
+        case ln_mode_t::BUSY:
+        case ln_mode_t::COMMAND:
+        case ln_mode_t::SEARCH:
+        case ln_mode_t::SEARCH_FILES:
+        case ln_mode_t::SEARCH_FILTERS:
+        case ln_mode_t::SEARCH_SPECTRO_DETAILS: {
+            if (mode != ln_mode_t::PAGING && mode != ln_mode_t::FILES
+                && mode != ln_mode_t::FILTER
+                && mode != ln_mode_t::SPECTRO_DETAILS)
+            {
+                log_debug("prompt is active, ignoring change to mode %s",
+                          lnav_mode_strings[lnav::enums::to_underlying(mode)]);
+                return;
+            }
+            break;
+        }
         case ln_mode_t::FILE_DETAILS: {
             lnav_data.ld_file_details_view.tc_cursor_role
                 = role_t::VCR_DISABLED_CURSOR_LINE;
@@ -1515,9 +1603,18 @@ set_view_mode(ln_mode_t mode)
         default:
             break;
     }
+    breadcrumb_view->set_enabled(true);
     switch (mode) {
-        case ln_mode_t::SEARCH: {
+        case ln_mode_t::SQL:
+        case ln_mode_t::EXEC:
+        case ln_mode_t::USER:
+        case ln_mode_t::COMMAND:
+        case ln_mode_t::SEARCH:
+        case ln_mode_t::SEARCH_FILES:
+        case ln_mode_t::SEARCH_FILTERS:
+        case ln_mode_t::SEARCH_SPECTRO_DETAILS: {
             lnav_data.ld_status[LNS_DOC].set_needs_update();
+            breadcrumb_view->set_enabled(false);
             break;
         }
         case ln_mode_t::BREADCRUMBS: {
@@ -1528,10 +1625,29 @@ set_view_mode(ln_mode_t mode)
             lnav_data.ld_status[LNS_FILTER].set_needs_update();
             lnav_data.ld_file_details_view.tc_cursor_role
                 = role_t::VCR_CURSOR_LINE;
+            lnav_data.ld_view_stack.top().value()->set_enabled(false);
             break;
         }
-        default:
+        case ln_mode_t::FILES:
+        case ln_mode_t::FILTER:
+        case ln_mode_t::SPECTRO_DETAILS: {
+            lnav_data.ld_files_source.text_selection_changed(
+                lnav_data.ld_files_view);
+            breadcrumb_view->set_enabled(false);
+            lnav_data.ld_view_stack.top().value()->set_enabled(false);
             break;
+        }
+        case ln_mode_t::PAGING: {
+            lnav_data.ld_view_stack.top().value()->set_enabled(true);
+            break;
+        }
+        case ln_mode_t::BUSY: {
+            lnav_data.ld_view_stack.top().value()->set_enabled(false);
+            break;
+        }
+        case ln_mode_t::CAPTURE: {
+            break;
+        }
     }
     log_info("changing mode from %s to %s",
              lnav_mode_strings[lnav::enums::to_underlying(lnav_data.ld_mode)],
@@ -1613,7 +1729,7 @@ lnav_behavior::mouse_event(
     auto width = ncplane_dim_x(lnav_data.ld_window);
 
     me.me_x = x;
-    if (me.me_x >= width) {
+    if (me.me_x >= (ssize_t) width) {
         me.me_x = width - 1;
     }
     me.me_y = y - 1;
@@ -1625,6 +1741,7 @@ lnav_behavior::mouse_event(
         me.me_press_y = this->lb_last_event.me_press_y;
     }
 
+    this->lb_last_real_event = me;
     switch (me.me_state) {
         case mouse_button_state_t::BUTTON_STATE_PRESSED:
         case mouse_button_state_t::BUTTON_STATE_DOUBLE_CLICK: {
@@ -1693,4 +1810,21 @@ lnav_behavior::mouse_event(
     {
         this->lb_last_view = nullptr;
     }
+}
+
+void
+lnav_behavior::tick(const timeval& now)
+{
+    if (this->lb_last_view == nullptr
+        || this->lb_last_event.me_state
+            != mouse_button_state_t::BUTTON_STATE_DRAGGED)
+    {
+        return;
+    }
+
+    this->lb_last_event = this->lb_last_real_event;
+    this->lb_last_event.me_y -= this->lb_last_view->get_y();
+    this->lb_last_event.me_x -= this->lb_last_view->get_x();
+    this->lb_last_event.me_time = now;
+    this->lb_last_view->handle_mouse(this->lb_last_event);
 }

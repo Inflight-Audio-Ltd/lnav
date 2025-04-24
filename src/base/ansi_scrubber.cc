@@ -131,6 +131,7 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
     size_t cp_start = std::string::npos;
     int last_origin_end = 0;
     int erased = 0;
+    size_t tmp_sa_open = 0;
 
     std::replace(str.begin(), str.end(), '\0', ' ');
     auto matcher = regex.capture_from(str).into(md);
@@ -446,22 +447,30 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
                 shift_string_attrs(*sa, sf.sf_begin, -sf.length());
 
                 if (has_attrs) {
-                    for (auto rit = tmp_sa.rbegin(); rit != tmp_sa.rend();
-                         rit++)
+                    for (auto tmp_sa_curr = tmp_sa_open;
+                         tmp_sa_curr < tmp_sa.size();
+                         tmp_sa_curr++)
                     {
-                        if (rit->sa_range.lr_end != -1) {
+                        auto& sa = tmp_sa[tmp_sa_curr];
+                        if (sa.sa_range.lr_end != -1) {
                             continue;
                         }
-                        rit->sa_range.lr_end = cp_dst;
+                        sa.sa_range.lr_end = cp_dst;
+                        if (sa.sa_range.empty()) {
+                            sa.sa_type = &SA_INVALID;
+                        }
                     }
-                    lr.lr_start = cp_dst;
-                    lr.lr_end = -1;
-                    if (!attrs.empty()) {
-                        tmp_sa.emplace_back(lr, VC_STYLE.value(attrs));
+                    if (sf.sf_end < str.size()) {
+                        lr.lr_start = cp_dst;
+                        lr.lr_end = -1;
+                        tmp_sa_open = tmp_sa.size();
+                        if (!attrs.empty()) {
+                            tmp_sa.emplace_back(lr, VC_STYLE.value(attrs));
+                        }
+                        role | [&lr, &tmp_sa](role_t r) {
+                            tmp_sa.emplace_back(lr, VC_ROLE.value(r));
+                        };
                     }
-                    role | [&lr, &tmp_sa](role_t r) {
-                        tmp_sa.emplace_back(lr, VC_ROLE.value(r));
-                    };
                 }
                 if (cp_dst > 0) {
                     tmp_sa.emplace_back(
@@ -484,7 +493,9 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
         cp_dst += cp_len;
         str.resize(cp_dst);
     }
-    if (sa != nullptr && last_origin_end > 0 && last_origin_end != str.size()) {
+    if (sa != nullptr && last_origin_end > 0
+        && last_origin_end != (ssize_t) str.size())
+    {
         tmp_sa.emplace_back(line_range{(int) last_origin_end, (int) str.size()},
                             SA_ORIGIN_OFFSET.value(erased));
     }

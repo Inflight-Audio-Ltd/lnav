@@ -29,16 +29,14 @@
  * @file shlex.cc
  */
 
-#ifdef __CYGWIN__
-#    include <alloca.h>
-#endif
+#include "shlex.hh"
 
 #include <pwd.h>
 
 #include "base/opt_util.hh"
+#include "base/short_alloc.h"
 #include "config.h"
 #include "pcrepp/pcre2pp.hh"
-#include "shlex.hh"
 
 using namespace lnav::roles::literals;
 
@@ -207,11 +205,10 @@ shlex::scan_variable_ref()
     retval.tr_frag.sf_begin = this->s_index;
     this->s_index += 1;
     if (this->s_index >= this->s_len) {
+        retval.tr_token = shlex_token_t::eof;
+        retval.tr_frag.sf_begin = this->s_len;
         retval.tr_frag.sf_end = this->s_index;
-        return Err(tokenize_error_t{
-            "invalid variable reference",
-            retval.tr_frag,
-        });
+        return Ok(retval);
     }
 
     if (this->s_str[this->s_index] == '{') {
@@ -261,7 +258,8 @@ shlex::resolve_home_dir(std::string& result, string_fragment cap) const
     if (cap.length() == 1) {
         result.append(getenv_opt("HOME").value_or("~"));
     } else {
-        auto username = (char*) alloca(cap.length());
+        stack_buf allocator;
+        auto* username = allocator.allocate(cap.length());
 
         memcpy(username, &this->s_str[cap.sf_begin + 1], cap.length() - 1);
         username[cap.length() - 1] = '\0';
@@ -341,7 +339,7 @@ shlex::eval(std::string& result, const scoped_resolver& vars)
     return true;
 }
 
-Result<std::vector<shlex::split_element_t>, shlex::tokenize_error_t>
+Result<std::vector<shlex::split_element_t>, shlex::split_error_t>
 shlex::split(const scoped_resolver& vars)
 {
     std::vector<split_element_t> retval;
@@ -356,7 +354,22 @@ shlex::split(const scoped_resolver& vars)
         return Ok(retval);
     }
     while (!done) {
-        auto tokenize_res = TRY(this->tokenize());
+        auto tokenize_res0 = this->tokenize();
+        if (tokenize_res0.isErr()) {
+            auto te = tokenize_res0.unwrapErr();
+            if (retval.empty()) {
+                auto sf = string_fragment::from_bytes(this->s_str, this->s_len);
+                retval.emplace_back(split_element_t{sf, sf.to_string()});
+            } else {
+                retval.back().se_origin.sf_end = te.te_source.sf_end;
+                retval.back().se_value.append(&this->s_str[last_index]);
+            }
+            return Err(split_error_t{
+                std::move(retval),
+                tokenize_res0.unwrapErr(),
+            });
+        }
+        auto tokenize_res = tokenize_res0.unwrap();
 
         if (start_new) {
             if (last_index < this->s_len) {

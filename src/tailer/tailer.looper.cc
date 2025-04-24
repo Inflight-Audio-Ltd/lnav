@@ -31,6 +31,9 @@
 
 #include "tailer.looper.hh"
 
+#include <lnav.prompt.hh>
+
+#include "base/auto_pid.hh"
 #include "base/fs_util.hh"
 #include "base/humanize.network.hh"
 #include "base/lnav_log.hh"
@@ -154,10 +157,11 @@ tailer::looper::loop_body()
 
             if (create_res.isErr()) {
                 report_error(netloc, create_res.unwrapErr());
-                if (std::any_of(
-                        rpq.rpq_new_paths.begin(),
-                        rpq.rpq_new_paths.end(),
-                        [](const auto& pair) { return !pair.second.loo_tail; }))
+                if (std::any_of(rpq.rpq_new_paths.begin(),
+                                rpq.rpq_new_paths.end(),
+                                [](const auto& pair) {
+                                    return !pair.second.loo_follow;
+                                }))
                 {
                     rpq.send_synced_to_main(netloc);
                     to_erase.push_back(netloc);
@@ -231,6 +235,7 @@ tailer::looper::load_preview(int64_t id, const network::path& path)
                         .clear();
                     lnav_data.ld_preview_source[0].clear();
                     lnav_data.ld_bottom_source.grep_error(msg);
+                    lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
                 });
             return;
         }
@@ -370,7 +375,8 @@ tailer::looper::host_tailer::for_host(const std::string& netloc)
             }
 
             if (next_res.is<string_fragment_producer::error>()) {
-                return Err(next_res.get<string_fragment_producer::error>().what);
+                return Err(
+                    next_res.get<string_fragment_producer::error>().what);
             }
 
             auto sf = next_res.get<string_fragment>();
@@ -558,6 +564,7 @@ tailer::looper::host_tailer::load_preview(int64_t id, const std::string& path)
                     .get_description()
                     .set_cylon(false)
                     .set_value(msg);
+                lnav_data.ld_status[LNS_PREVIEW0].set_needs_update();
             });
         },
         [&](const synced& s) { require(false); });
@@ -648,14 +655,14 @@ tailer::looper::host_tailer::loop_body()
                 auto desired_iter = conn.c_desired_paths.find(pe.pe_path);
                 if (desired_iter != conn.c_desired_paths.end()) {
                     report_error(this->get_display_path(pe.pe_path), pe.pe_msg);
-                    if (!desired_iter->second.loo_tail) {
+                    if (!desired_iter->second.loo_follow) {
                         conn.c_desired_paths.erase(desired_iter);
                     }
                 } else {
                     auto child_iter = conn.c_child_paths.find(pe.pe_path);
 
                     if (child_iter != conn.c_child_paths.end()
-                        && !child_iter->second.loo_tail)
+                        && !child_iter->second.loo_follow)
                     {
                         conn.c_child_paths.erase(child_iter);
                     }
@@ -759,7 +766,7 @@ tailer::looper::host_tailer::loop_body()
                             fc.fc_file_names[lpath_str]
                                 .with_filename(custom_name)
                                 .with_source(logfile_name_source::REMOTE)
-                                .with_tail(loo.loo_tail)
+                                .with_follow(loo.loo_follow)
                                 .with_non_utf_visibility(false)
                                 .with_visible_size_limit(256 * 1024);
                             update_active_files(fc);
@@ -894,7 +901,7 @@ tailer::looper::host_tailer::loop_body()
                     auto iter = conn.c_desired_paths.find(ps.ps_path);
 
                     if (iter != conn.c_desired_paths.end()) {
-                        if (iter->second.loo_tail) {
+                        if (iter->second.loo_follow) {
                             conn.c_synced_desired_paths.insert(ps.ps_path);
                         } else {
                             log_info("synced desired path: %s",
@@ -906,7 +913,7 @@ tailer::looper::host_tailer::loop_body()
                     auto iter = conn.c_child_paths.find(ps.ps_path);
 
                     if (iter != conn.c_child_paths.end()) {
-                        if (iter->second.loo_tail) {
+                        if (iter->second.loo_follow) {
                             conn.c_synced_child_paths.insert(ps.ps_path);
                         } else {
                             log_info("synced child path: %s",
@@ -977,7 +984,7 @@ tailer::looper::host_tailer::loop_body()
                     auto iter = conn.c_desired_paths.find(pl.pl_path);
 
                     if (iter != conn.c_desired_paths.end()) {
-                        if (iter->second.loo_tail) {
+                        if (iter->second.loo_follow) {
                             conn.c_synced_desired_paths.insert(pl.pl_path);
                         } else {
                             log_info("synced desired path: %s",
@@ -989,7 +996,7 @@ tailer::looper::host_tailer::loop_body()
                     auto iter = conn.c_child_paths.find(pl.pl_path);
 
                     if (iter != conn.c_child_paths.end()) {
-                        if (iter->second.loo_tail) {
+                        if (iter->second.loo_follow) {
                             conn.c_synced_child_paths.insert(pl.pl_path);
                         } else {
                             log_info("synced child path: %s",
@@ -1016,6 +1023,7 @@ tailer::looper::host_tailer::loop_body()
                             .clear();
                         lnav_data.ld_preview_source[0].clear();
                         lnav_data.ld_bottom_source.grep_error(ppe.ppe_msg);
+                        lnav_data.ld_status[LNS_BOTTOM].set_needs_update();
                     });
 
                 return std::move(this->ht_state);
@@ -1037,6 +1045,7 @@ tailer::looper::host_tailer::loop_body()
                             .set_value("For file: %s:%s",
                                        netloc.c_str(),
                                        ppd.ppd_path.c_str());
+                        lnav_data.ld_status[LNS_PREVIEW0].set_needs_update();
                         lnav_data.ld_preview_source[0]
                             .replace_with(str)
                             .set_text_format(detect_text_format(str));
@@ -1050,10 +1059,9 @@ tailer::looper::host_tailer::loop_body()
 
                 isc::to<main_looper&, services::main_t>().send(
                     [full_path](auto& mlooper) {
-#if 0
-                        lnav_data.ld_rl_view->add_possibility(
-                            ln_mode_t::COMMAND, "remote-path", full_path);
-#endif
+                        static auto& prompt = lnav::prompt::get();
+
+                        prompt.p_remote_paths.insert(full_path);
                     });
                 return std::move(this->ht_state);
             });
@@ -1141,13 +1149,13 @@ tailer::looper::remote_path_queue::send_synced_to_main(
     std::set<std::string> synced_files;
 
     for (const auto& pair : this->rpq_new_paths) {
-        if (!pair.second.loo_tail) {
+        if (!pair.second.loo_follow) {
             synced_files.emplace(
                 fmt::format(FMT_STRING("{}{}"), netloc, pair.first));
         }
     }
     for (const auto& pair : this->rpq_existing_paths) {
-        if (!pair.second.loo_tail) {
+        if (!pair.second.loo_follow) {
             synced_files.emplace(
                 fmt::format(FMT_STRING("{}{}"), netloc, pair.first));
         }

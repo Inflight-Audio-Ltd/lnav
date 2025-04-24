@@ -54,6 +54,8 @@ class db_label_source
 public:
     bool has_log_time_column() const { return !this->dls_time_column.empty(); }
 
+    bool empty() const override { return this->dls_headers.empty(); }
+
     size_t text_line_count() override { return this->dls_row_cursors.size(); }
 
     size_t text_size_for_line(textview_curses& tc,
@@ -157,12 +159,12 @@ public:
     size_t dls_push_column{0};
     std::vector<timeval> dls_time_column;
     std::vector<size_t> dls_cell_width;
-    int dls_time_column_index{-1};
+    size_t dls_time_column_index{SIZE_MAX};
     std::optional<size_t> dls_time_column_invalidated_at;
     std::optional<size_t> dls_level_column;
     std::vector<row_style> dls_row_styles;
     bool dls_row_styles_have_errors{false};
-    int dls_row_style_column{-1};
+    size_t dls_row_style_column{SIZE_MAX};
     ArenaAlloc::Alloc<char> dls_cell_allocator{1024};
     string_attrs_t dls_ansi_attrs;
 

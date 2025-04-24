@@ -32,6 +32,7 @@
 #ifndef logfile_hh
 #define logfile_hh
 
+#include <chrono>
 #include <filesystem>
 #include <set>
 #include <string>
@@ -46,6 +47,7 @@
 
 #include "ArenaAlloc/arenaalloc.h"
 #include "base/lnav_log.hh"
+#include "base/progress.hh"
 #include "base/result.h"
 #include "bookmarks.hh"
 #include "byte_array.hh"
@@ -67,20 +69,15 @@ class logfile_observer {
 public:
     virtual ~logfile_observer() = default;
 
-    enum class indexing_result {
-        CONTINUE,
-        BREAK,
-    };
-
     /**
      * @param lf The logfile object that is doing the indexing.
      * @param off The current offset in the file being processed.
      * @param total The total size of the file.
      * @return false
      */
-    virtual indexing_result logfile_indexing(const logfile* lf,
-                                             file_off_t off,
-                                             file_size_t total)
+    virtual lnav::progress_result_t logfile_indexing(const logfile* lf,
+                                                     file_off_t off,
+                                                     file_ssize_t total)
         = 0;
 };
 
@@ -133,6 +130,11 @@ public:
         return this->lf_filename;
     }
 
+    std::filesystem::path get_path_for_key() const
+    {
+        return this->lf_actual_path.value_or(this->lf_filename);
+    }
+
     /** @return The filename as given in the constructor, excluding the path
      * prefix. */
     const std::string& get_basename() const { return this->lf_basename; }
@@ -162,6 +164,15 @@ public:
 
     int get_index_generation() const { return this->lf_index_generation; }
 
+    file_ssize_t get_content_size() const
+    {
+        auto lb_size = this->lf_line_buffer.get_file_size();
+        if (lb_size != -1) {
+            return lb_size;
+        }
+        return this->lf_stat.st_size;
+    }
+
     std::optional<const_iterator> line_for_offset(file_off_t off) const;
 
     /**
@@ -178,10 +189,6 @@ public:
 
     void set_text_format(text_format_t tf) { this->lf_text_format = tf; }
 
-    /**
-     * @return The last modified time of the file when the file was last
-     * indexed.
-     */
     std::chrono::microseconds get_modified_time() const
     {
         return this->lf_index_time;
@@ -189,7 +196,7 @@ public:
 
     int get_time_offset_line() const { return this->lf_time_offset_line; }
 
-    const struct timeval& get_time_offset() const
+    const timeval& get_time_offset() const
     {
         return this->lf_time_offset;
     }
@@ -200,7 +207,7 @@ public:
 
     void clear_time_offset()
     {
-        struct timeval tv = {0, 0};
+        timeval tv = {0, 0};
 
         this->adjust_content_time(-1, tv);
     }
@@ -215,6 +222,11 @@ public:
     void set_include_in_session(bool enabled)
     {
         this->lf_options.with_include_in_session(enabled);
+    }
+
+    void set_init_location(file_location_t loc)
+    {
+        this->lf_options.with_init_location(loc);
     }
 
     void reset_state();
@@ -260,12 +272,17 @@ public:
 
     Result<shared_buffer_ref, std::string> read_line(iterator ll);
 
+    enum class read_format_t {
+        plain,
+        with_framing,
+    };
+
     struct read_file_result {
         file_range rfr_range;
         std::string rfr_content;
     };
 
-    Result<read_file_result, std::string> read_file();
+    Result<read_file_result, std::string> read_file(read_format_t format);
 
     Result<shared_buffer_ref, std::string> read_range(const file_range& fr);
 
@@ -455,6 +472,11 @@ public:
 
     size_t estimated_remaining_lines() const;
 
+    const std::string& get_decompress_error() const
+    {
+        return this->lf_line_buffer.get_decompress_error();
+    }
+
 protected:
     /**
      * Process a line from the file.
@@ -467,7 +489,7 @@ protected:
                         const line_info& li,
                         scan_batch_context& sbc);
 
-    void set_format_base_time(log_format* lf);
+    void set_format_base_time(log_format* lf, const line_info& li);
 
 private:
     logfile(std::filesystem::path filename, const logfile_open_options& loo);
@@ -534,7 +556,7 @@ public:
     virtual void logline_restart(const logfile& lf, file_size_t rollback_size)
         = 0;
 
-    virtual void logline_new_lines(const logfile& lf,
+    virtual bool logline_new_lines(const logfile& lf,
                                    logfile::const_iterator ll_begin,
                                    logfile::const_iterator ll_end,
                                    const shared_buffer_ref& sbr)

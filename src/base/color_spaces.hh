@@ -30,6 +30,8 @@
 #ifndef color_spaces_hh
 #define color_spaces_hh
 
+#include <string>
+
 #include "result.h"
 #include "intern_string.hh"
 #include "mapbox/variant.hpp"
@@ -91,6 +93,8 @@ struct lab_color {
 
     explicit lab_color(const rgb_color& rgb);
 
+    rgb_color to_rgb() const;
+
     double deltaE(const lab_color& other) const;
 
     bool sufficient_contrast(const lab_color& other) const;
@@ -143,7 +147,7 @@ class color_unit {
 public:
     static Result<color_unit, std::string> from_str(const string_fragment& sf);
 
-    static color_unit make_empty() { return color_unit{transparent{}}; }
+    static const color_unit EMPTY;
 
     static color_unit from_rgb(const rgb_color& rgb)
     {

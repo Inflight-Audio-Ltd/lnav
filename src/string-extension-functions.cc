@@ -7,16 +7,13 @@
  * commercial or non-commercial, and by any means.
  */
 
-#ifdef __CYGWIN__
-#    include <alloca.h>
-#endif
-
 #include <unordered_map>
 
 #include <sqlite3.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/fts_fuzzy_match.hh"
 #include "base/humanize.hh"
 #include "base/is_utf8.hh"
 #include "base/lnav.gzip.hh"
@@ -28,7 +25,6 @@
 #include "elem_to_json.hh"
 #include "fmt/format.h"
 #include "formats/logfmt/logfmt.parser.hh"
-#include "fts_fuzzy_match.hh"
 #include "hasher.hh"
 #include "libbase64.h"
 #include "mapbox/variant.hpp"

@@ -550,7 +550,19 @@ load_ncinput(inputctx* ictx, ncinput *tni){
     ni->id = NCKEY_BACKSPACE;
   }else if(ni->id > 0 && ni->id <= 26 && ni->id != '\t'){
     ni->id = ni->id + 'A' - 1;
-    ni->modifiers |= NCKEY_MOD_CTRL;
+      ni->modifiers |= NCKEY_MOD_CTRL;
+  }else if(ni->id == 28) {
+      ni->id = '\\';
+      ni->modifiers |= NCKEY_MOD_CTRL;
+  }else if(ni->id == 29) {
+      ni->id = ']';
+      ni->modifiers |= NCKEY_MOD_CTRL;
+  }else if(ni->id == 30) {
+      ni->id = '^';
+      ni->modifiers |= NCKEY_MOD_CTRL;
+  }else if (ni->id == 31) {
+      ni->id = '_';
+      ni->modifiers |= NCKEY_MOD_CTRL;
   }
   if(++ictx->iwrite == ictx->isize){
     ictx->iwrite = 0;
@@ -878,7 +890,17 @@ kitty_cb(inputctx* ictx){
   return 2;
 }
 
-static int 
+static int
+kitty_gbg(inputctx* ictx)
+{
+    const unsigned char* upos = strchr(ictx->amata.matchstart, 'u');
+    logerror("unknown kitty keyboard sequence: %.*s",
+             upos - ictx->amata.matchstart,
+             ictx->amata.matchstart + 1);
+    return 2;
+}
+
+static int
 kitty_cb_atxtn(inputctx* ictx, int n, int with_event){
   uint32_t txt[5]={0};
   unsigned val = amata_next_numeric(&ictx->amata, "\x1b[", ';');
@@ -1826,6 +1848,8 @@ build_cflow_automaton(inputctx* ictx){
     { "[\\Nu", kitty_cb_simple, },
     { "[\\N;\\N~", wezterm_cb, },
     { "[\\N;\\Nu", kitty_cb, },
+      // iTerm sends this garbage for some reason
+    { "[\\N:\\Nu", kitty_gbg, },
     { "[\\N;\\N;\\Nu", kitty_cb_atxt1, },
     { "[\\N;\\N;\\N;\\Nu", kitty_cb_atxt2, },
     { "[\\N;\\N;\\N;\\N;\\Nu", kitty_cb_atxt3, },
@@ -1868,7 +1892,7 @@ build_cflow_automaton(inputctx* ictx){
     { "[?1;2S", NULL, }, // negative cregs XTSMGRAPHICS
     { "[?1;3S", NULL, }, // negative cregs XTSMGRAPHICS
     { "[?1;3;S", NULL, }, // iterm2 negative cregs XTSMGRAPHICS
-    { "[?1;3;0S", NULL, }, // negative cregs XTSMGRAPHICS
+    { "[?1;3;\\NS", NULL, }, // negative cregs XTSMGRAPHICS
     { "[?2;1S", NULL, }, // negative pixels XTSMGRAPHICS
     { "[?2;2S", NULL, }, // negative pixels XTSMGRAPHICS
     { "[?2;3S", NULL, }, // negative pixels XTSMGRAPHICS
@@ -1878,6 +1902,7 @@ build_cflow_automaton(inputctx* ictx){
     { "[?7c", da1_cb, },   // CSI ? 7 c ("VT131")
     { "[?1;0c", da1_cb, }, // CSI ? 1 ; 0 c ("VT101 with No Options")
     { "[?1;2c", da1_cb, }, // CSI ? 1 ; 2 c ("VT100 with Advanced Video Option")
+    { "[?1;2;\\Dc", da1_attrs_cb, },
     { "[?4;6c", da1_cb, }, // CSI ? 4 ; 6 c ("VT132 with Advanced Video and Graphics")
     // CSI ? 1 2 ; Ps c ("VT125")
     // CSI ? 6 0 ; Ps c (kmscon)
@@ -1885,6 +1910,7 @@ build_cflow_automaton(inputctx* ictx){
     // CSI ? 6 3 ; Ps c ("VT320")
     // CSI ? 6 4 ; Ps c ("VT420")
     // CSI ? 6 5 ; Ps c (WezTerm, VT5xx?)
+    { "[?\\Nc", da1_attrs_cb, },
     { "[?\\N;\\Dc", da1_attrs_cb, },
     { "[?1;0;\\NS", xtsmgraphics_cregs_cb, },
     { "[?2;0;\\N;\\NS", xtsmgraphics_sixel_cb, },
@@ -3059,13 +3085,13 @@ struct initial_responses* inputlayer_get_responses(inputctx* ictx){
       struct timeval wait_start_tv, curr_tv, diff_tv;
       loginfo("inputlayer_get_resp wait");
       gettimeofday(&wait_start_tv, NULL);
-      struct timespec ts = {wait_start_tv.tv_sec + 1, 0};
+      struct timespec ts = {wait_start_tv.tv_sec + 5, 0};
   pthread_mutex_lock(&ictx->ilock);
   while(ictx->initdata || !ictx->initdata_complete){
     pthread_cond_timedwait(&ictx->icond, &ictx->ilock, &ts);
       gettimeofday(&curr_tv, NULL);
       timersub(&curr_tv, &wait_start_tv, &diff_tv);
-      if (diff_tv.tv_sec > 1) {
+      if (diff_tv.tv_sec > 5) {
           logpanic("timedout waiting for initial response");
           return NULL;
       }

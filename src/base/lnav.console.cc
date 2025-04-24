@@ -69,7 +69,7 @@ snippet::from_content_with_offset(intern_string_t src,
     retval.s_content
         = content.subline(line_with_context.sf_begin,
                           line_with_error.sf_end - line_with_context.sf_begin);
-    if (line_with_error.sf_end >= retval.s_content.get_string().size()) {
+    if (line_with_error.sf_end >= (int) retval.s_content.get_string().size()) {
         retval.s_content.append("\n");
     }
     retval.s_content.append(pointer).append(
@@ -131,6 +131,21 @@ user_message::warning(const attr_line_t& al)
     retval.um_level = level::warning;
     retval.um_message.append(al);
     return retval;
+}
+
+user_message&
+user_message::remove_internal_snippets()
+{
+    auto new_end = std::remove_if(
+        this->um_snippets.begin(),
+        this->um_snippets.end(),
+        [](const snippet& snip) {
+            return snip.s_location.sl_source.to_string_fragment().startswith(
+                "__");
+        });
+    this->um_snippets.erase(new_end, this->um_snippets.end());
+
+    return *this;
 }
 
 attr_line_t
@@ -336,6 +351,30 @@ get_fd_tty(int fd)
 }
 
 static void
+set_rev(fmt::text_style& line_style)
+{
+    if (line_style.has_emphasis()
+        && lnav::enums::to_underlying(line_style.get_emphasis())
+            & lnav::enums::to_underlying(fmt::emphasis::reverse))
+    {
+        auto old_style = line_style;
+        auto old_emph = fmt::emphasis(
+            lnav::enums::to_underlying(old_style.get_emphasis())
+            & ~lnav::enums::to_underlying(fmt::emphasis::reverse));
+        line_style = fmt::text_style{};
+        if (old_style.has_foreground()) {
+            line_style |= fmt::fg(old_style.get_foreground());
+        }
+        if (old_style.has_background()) {
+            line_style |= fmt::bg(old_style.get_background());
+        }
+        line_style |= old_emph;
+    } else {
+        line_style |= fmt::emphasis::reverse;
+    }
+}
+
+static void
 role_to_style(const role_t role,
               fmt::text_style& default_bg_style,
               fmt::text_style& default_fg_style,
@@ -349,13 +388,14 @@ role_to_style(const role_t role,
             line_style |= fmt::emphasis::bold;
             break;
         case role_t::VCR_SEARCH:
-            line_style |= fmt::emphasis::reverse;
+            set_rev(line_style);
             break;
         case role_t::VCR_ERROR:
         case role_t::VCR_DIFF_DELETE:
             line_style
                 |= fmt::fg(fmt::terminal_color::red) | fmt::emphasis::bold;
             break;
+        case role_t::VCR_HIDDEN:
         case role_t::VCR_WARNING:
         case role_t::VCR_RE_REPEAT:
             line_style |= fmt::fg(fmt::terminal_color::yellow);
@@ -445,6 +485,30 @@ wchar_for_icon(ui_icon_t ic)
             return {L'\u26a0', role_t::VCR_WARNING};
         case ui_icon_t::error:
             return {L'\u2718', role_t::VCR_ERROR};
+
+        case ui_icon_t::log_level_trace:
+            return {L'\U0001F143', role_t::VCR_TEXT};
+        case ui_icon_t::log_level_debug:
+            return {L'\U0001F133', role_t::VCR_TEXT};
+        case ui_icon_t::log_level_info:
+            return {L'\U0001F138', role_t::VCR_TEXT};
+        case ui_icon_t::log_level_stats:
+            return {L'\U0001F142', role_t::VCR_TEXT};
+        case ui_icon_t::log_level_notice:
+            return {L'\U0001F13d', role_t::VCR_TEXT};
+        case ui_icon_t::log_level_warning:
+            return {L'\U0001F146', role_t::VCR_WARNING};
+        case ui_icon_t::log_level_error:
+            return {L'\U0001F134', role_t::VCR_ERROR};
+        case ui_icon_t::log_level_critical:
+            return {L'\U0001F132', role_t::VCR_ERROR};
+        case ui_icon_t::log_level_fatal:
+            return {L'\U0001F135', role_t::VCR_ERROR};
+
+        case ui_icon_t::play:
+            return {L'\u25b6', role_t::VCR_TEXT};
+        case ui_icon_t::edit:
+            return {L'\u270f', role_t::VCR_TEXT};
     }
 
     ensure(false);
@@ -540,7 +604,7 @@ println(FILE* file, const attr_line_t& al)
                     auto style = saw.get();
 
                     if (style.has_style(text_attrs::style::reverse)) {
-                        line_style |= fmt::emphasis::reverse;
+                        set_rev(line_style);
                     }
                     if (style.has_style(text_attrs::style::bold)) {
                         line_style |= fmt::emphasis::bold;
@@ -662,9 +726,19 @@ println(FILE* file, const attr_line_t& al)
                     case '\x07':
                         sub.append("\U0001F514");
                         break;
+                    case '\t':
+                    case '\n':
+                        sub.push_back(ch);
+                        break;
 
                     default:
-                        sub.append(&str[cp_start], lpc - cp_start);
+                        if (ch <= 0x1f) {
+                            sub.push_back(0xe2);
+                            sub.push_back(0x90);
+                            sub.push_back(0x80 + ch);
+                        } else {
+                            sub.append(&str[cp_start], lpc - cp_start);
+                        }
                         break;
                 }
             }

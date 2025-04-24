@@ -80,8 +80,7 @@ child_poller::poll(file_collection& fc)
         });
 }
 
-file_collection::limits_t::
-limits_t()
+file_collection::limits_t::limits_t()
 {
     static constexpr rlim_t RESERVED_FDS = 32;
 
@@ -321,6 +320,7 @@ file_collection::watch_logfile(const std::string& filename,
     if (this->fc_closed_files.count(filename)
         || this->fc_closed_files.count(filename_key))
     {
+        log_trace("file is closed, ignore");
         return std::nullopt;
     }
 
@@ -358,6 +358,8 @@ file_collection::watch_logfile(const std::string& filename,
             auto err_iter = errs->find(filename_key);
             if (err_iter != errs->end()) {
                 if (err_iter->second.fei_mtime != st.st_mtime) {
+                    log_debug("clearing error info for file: %s",
+                              filename_key.c_str());
                     errs->erase(err_iter);
                 }
             }
@@ -384,6 +386,7 @@ file_collection::watch_logfile(const std::string& filename,
             return st.st_ino == elem.st_ino && st.st_dev == elem.st_dev;
         }))
     {
+        log_trace("same stat: %s", filename.c_str());
         // this file is probably a link that we have already scanned in this
         // pass.
         return std::nullopt;
@@ -437,7 +440,7 @@ file_collection::watch_logfile(const std::string& filename,
                         = lnav::filesystem::open_file(filename, O_RDONLY);
                     if (open_res.isOk()) {
                         auto looper_options = lnav::piper::options{};
-                        looper_options.with_tail(loo.loo_tail);
+                        looper_options.with_follow(loo.loo_follow);
                         auto create_res
                             = lnav::piper::create_looper(filename,
                                                          open_res.unwrap(),
@@ -614,6 +617,9 @@ file_collection::watch_logfile(const std::string& filename,
          */
         file_collection retval;
 
+        log_info("renamed file: %s -> %s",
+                 lf->get_filename().c_str(),
+                 filename.c_str());
         retval.fc_renamed_files.emplace_back(lf, filename);
         return lnav::futures::make_ready_future(std::move(retval));
     }
@@ -637,7 +643,7 @@ file_collection::expand_filename(
     static_root_mem<glob_t, globfree> gl;
 
     {
-        std::lock_guard<std::mutex> lg(REALPATH_CACHE_MUTEX);
+        std::lock_guard lg(REALPATH_CACHE_MUTEX);
 
         if (REALPATH_CACHE.find(path) != REALPATH_CACHE.end()) {
             return;
@@ -756,8 +762,7 @@ file_collection::expand_filename(
                 if (future_opt) {
                     auto fut = std::move(future_opt.value());
                     if (fq.push_back(std::move(fut))
-                        == lnav::futures::future_queue<
-                            file_collection>::processor_result_t::interrupt)
+                        == lnav::progress_result_t::interrupt)
                     {
                         break;
                     }
@@ -788,13 +793,12 @@ file_collection::rescan_files(bool required)
                 && this->fc_files.size() + retval.fc_files.size()
                     < get_limits().l_open_files)
             {
-                return lnav::futures::future_queue<
-                    file_collection>::processor_result_t::ok;
+                return lnav::progress_result_t::ok;
             }
-            return lnav::futures::future_queue<
-                file_collection>::processor_result_t::interrupt;
+            return lnav::progress_result_t::interrupt;
         });
 
+    this->fc_new_stats.clear();
     for (auto& pair : this->fc_file_names) {
         if (this->fc_files.size() + retval.fc_files.size()
             >= get_limits().l_open_files)
@@ -833,8 +837,6 @@ file_collection::rescan_files(bool required)
     }
 
     fq.pop_to();
-
-    this->fc_new_stats.clear();
 
     return retval;
 }

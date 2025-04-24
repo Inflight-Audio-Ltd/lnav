@@ -33,7 +33,9 @@
 #define lnav_log_format_ext_hh
 
 #include <list>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "log_format.hh"
 #include "log_search_table_fwd.hh"
@@ -69,7 +71,7 @@ public:
         std::string vd_rewriter;
         std::string vd_description;
         intern_string_t vd_rewrite_src_name;
-        bool vd_used_in_line_format{false};
+        std::optional<size_t> vd_line_format_index;
         bool vd_is_desc_field{false};
     };
 
@@ -115,15 +117,6 @@ public:
 
     struct level_pattern {
         factory_container<lnav::pcre2pp::code> lp_pcre;
-    };
-
-    struct yajl_handle_deleter {
-        void operator()(yajl_handle handle) const
-        {
-            if (handle != nullptr) {
-                yajl_free(handle);
-            }
-        }
     };
 
     external_log_format(const intern_string_t name)
@@ -284,6 +277,7 @@ public:
         size_t vlcr_line_format_count{0};
         bool vlcr_has_ansi{false};
         bool vlcr_valid_utf{true};
+        std::optional<size_t> vlcr_line_format_index;
     };
 
     value_line_count_result value_line_count(const value_def* vd,
@@ -343,6 +337,9 @@ public:
     std::vector<std::shared_ptr<value_def>> elf_value_def_order;
     robin_hood::unordered_map<string_fragment, value_def*, frag_hasher>
         elf_value_def_frag_map;
+    std::vector<std::pair<string_fragment, value_def*>>
+        elf_value_def_read_order;
+    ArenaAlloc::Alloc<char> elf_allocator{4096};
     std::vector<std::shared_ptr<value_def>> elf_numeric_value_defs;
     size_t elf_column_count{0};
     double elf_timestamp_divisor{1.0};
@@ -443,6 +440,10 @@ public:
                      ssize_t len);
 
     logline_value_meta get_value_meta(intern_string_t field_name,
+                                      value_kind_t kind);
+
+    logline_value_meta get_value_meta(yajlpp_parse_context* ypc,
+                                      const value_def* vd,
                                       value_kind_t kind);
 
     std::vector<lnav::console::snippet> get_snippets() const;

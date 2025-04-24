@@ -145,7 +145,8 @@ The second to last line is the bottom status bar, which shows the following:
 * the loading indicator.
 
 When the interactive prompt is active, this bar can show the prompt
-description, help text, or error message.
+description, help text, or error message.  You can also click and
+drag this bar to resize the prompt when in multi-line mode.
 
 Prompt
 ------
@@ -238,6 +239,12 @@ message.  Inside the overlay, the following hotkeys are supported:
 * :kbd:`#` to open the SQL prompt with a query to create a chart of this
   field's values over time.
 
+The "Permalink" line in the details overlay contains a string that you
+can use to reference this particular message.  It can be used as an
+argument to the :ref:`:goto<goto>` command, the target of a Markdown
+link in a log message comment, or compared to the :code:`log_line_link`
+link in log tables.
+
 The source file name for each message can be displayed by scrolling left.
 Scrolling left once will show the shortened version of the file name relative
 to the other files that are loaded.  In the shortened version, the unique
@@ -308,9 +315,13 @@ DB
 ^^
 
 The DB view shows the results of queries done through the SQLite interface.
-You can execute a query by pressing :kbd:`;` and then entering a SQL statement.
+You can execute a query by pressing :kbd:`;` and then entering a SQL or
+PRQL [#]_ statement.
 
 Press :kbd:`v` to switch to the database result view.
+
+.. [#] lnav must be compiled in an environment with Rust/Cargo available
+   for PRQL support.
 
 HELP
 ^^^^
@@ -318,7 +329,7 @@ HELP
 The help view displays the builtin help text.  While in the help view, the
 breadcrumb bar can be used to navigate to different sections of the document.
 
-Press :kbd:`?` to switch to the help view.
+Press :kbd:`?` to switch to the help view or use the command :code:`:help`.
 
 HIST
 ^^^^

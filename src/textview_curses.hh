@@ -116,7 +116,7 @@ public:
 
     void revert_to_last(logfile_filter_state& lfs, size_t rollback_size);
 
-    void add_line(logfile_filter_state& lfs,
+    bool add_line(logfile_filter_state& lfs,
                   logfile_const_iterator ll,
                   const shared_buffer_ref& line);
 
@@ -440,6 +440,8 @@ public:
 
     virtual void register_view(textview_curses* tc) { this->tss_view = tc; }
 
+    virtual bool empty() const = 0;
+
     /**
      * @return The total number of lines available from the source.
      */
@@ -521,11 +523,6 @@ public:
      * @param bm The bookmarks data structure used by the text view.
      */
     virtual void text_update_marks(vis_bookmarks& bm) {}
-
-    virtual std::string text_source_name(const textview_curses& tv)
-    {
-        return "";
-    }
 
     filter_stack& get_filters() { return this->tss_filters; }
 
@@ -731,13 +728,6 @@ public:
         return this->tc_sub_source->text_size_for_line(*this, row);
     }
 
-    std::string listview_source_name(const listview_curses& lv)
-    {
-        return this->tc_sub_source == nullptr
-            ? ""
-            : this->tc_sub_source->text_source_name(*this);
-    }
-
     std::optional<line_info> grep_value_for_line(vis_line_t line,
                                                  std::string& value_out);
 
@@ -888,6 +878,7 @@ public:
                           const line_range& body,
                           const line_range& orig_line);
 
+    bool tc_interactive{false};
     std::function<void(textview_curses&)> tc_state_event_handler;
 
     std::optional<role_t> tc_cursor_role;
@@ -906,6 +897,8 @@ public:
     bool tc_text_selection_active{false};
     display_line_content_t tc_press_line;
     int tc_press_left{0};
+    std::function<void(textview_curses&, const attr_line_t&, int x)>
+        tc_on_click;
 
 protected:
     class grep_highlighter {

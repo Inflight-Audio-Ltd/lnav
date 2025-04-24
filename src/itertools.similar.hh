@@ -33,8 +33,8 @@
 #include <queue>
 #include <string>
 
+#include "base/fts_fuzzy_match.hh"
 #include "base/itertools.hh"
-#include "fts_fuzzy_match.hh"
 
 namespace lnav::itertools {
 
@@ -43,7 +43,7 @@ namespace details {
 template<typename F>
 struct similar_to {
     std::optional<F> st_mapper;
-    std::string st_pattern;
+    const std::string st_pattern;
     size_t st_count{5};
 };
 
@@ -91,9 +91,6 @@ operator|(const T& in, const lnav::itertools::details::similar_to<F>& st)
 
     if (st.st_pattern.empty()) {
         retval.insert(retval.begin(), in.begin(), in.end());
-        if (retval.size() > st.st_count) {
-            retval.resize(st.st_count);
-        }
         return retval;
     }
 

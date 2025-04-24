@@ -35,6 +35,7 @@
 #include "base/ansi_scrubber.hh"
 #include "base/humanize.time.hh"
 #include "base/injector.hh"
+#include "base/lnav_log.hh"
 #include "base/time_util.hh"
 #include "config.h"
 #include "data_scanner.hh"
@@ -77,20 +78,21 @@ text_filter::revert_to_last(logfile_filter_state& lfs, size_t rollback_size)
     }
 }
 
-void
+bool
 text_filter::add_line(logfile_filter_state& lfs,
                       logfile::const_iterator ll,
                       const shared_buffer_ref& line)
 {
-    bool match_state = this->matches(line_source{*lfs.tfs_logfile, ll}, line);
-
     if (ll->is_message()) {
         this->end_of_message(lfs);
     }
+    auto retval = this->matches(line_source{*lfs.tfs_logfile, ll}, line);
 
     lfs.tfs_message_matched[this->lf_index]
-        = lfs.tfs_message_matched[this->lf_index] || match_state;
+        = lfs.tfs_message_matched[this->lf_index] || retval;
     lfs.tfs_lines_for_message[this->lf_index] += 1;
+
+    return retval;
 }
 
 void
@@ -171,7 +173,7 @@ text_accel_source::get_time_offset_for_line(textview_curses& tc, vis_line_t vl)
     } else {
         auto prev_row
             = std::max(prev_umark.value_or(0_vl), prev_emark.value_or(0_vl));
-        auto first_line = this->text_accel_get_line(prev_row);
+        auto* first_line = this->text_accel_get_line(prev_row);
         auto start_tv = first_line->get_timeval();
         diff_tv = curr_tv - start_tv;
     }
@@ -248,7 +250,7 @@ textview_curses::reload_config(error_reporter& reporter)
                                          .append_quoted(sc.sc_color))
                                      .with_reason(msg));
                         invalid = true;
-                        return styling::color_unit::make_empty();
+                        return styling::color_unit::EMPTY;
                     }));
             attrs.ta_bg_color = vc.match_color(
                 styling::color_unit::from_str(bg_color).unwrapOrElse(
@@ -259,7 +261,7 @@ textview_curses::reload_config(error_reporter& reporter)
                                          .append_quoted(sc.sc_background_color))
                                      .with_reason(msg));
                         invalid = true;
-                        return styling::color_unit::make_empty();
+                        return styling::color_unit::EMPTY;
                     }));
             if (invalid) {
                 continue;
@@ -334,7 +336,16 @@ textview_curses::grep_begin(grep_proc<vis_line_t>& gp,
             }
         }
         if (pair.first != pair.second) {
-            search_bv.erase(pair.first, pair.second);
+            auto to_del = std::vector<vis_line_t>{};
+            for (auto file_iter = pair.first; file_iter != pair.second;
+                 ++file_iter)
+            {
+                to_del.emplace_back(*file_iter);
+            }
+
+            for (auto cl : to_del) {
+                search_bv.bv_tree.erase(cl);
+            }
         }
     }
 
@@ -347,7 +358,7 @@ textview_curses::grep_end_batch(grep_proc<vis_line_t>& gp)
     if (this->tc_follow_deadline.tv_sec
         && this->tc_follow_selection == this->get_selection())
     {
-        struct timeval now;
+        timeval now;
 
         gettimeofday(&now, nullptr);
         if (this->tc_follow_deadline < now) {
@@ -717,6 +728,44 @@ textview_curses::handle_mouse(mouse_event& me)
                         };
                     }
                 }
+                if (this->tc_on_click) {
+                    this->tc_on_click(*this, al, cursor_sf.sf_begin);
+                }
+            }
+            if (mouse_line.is<overlay_content>()) {
+                const auto& oc = mouse_line.get<overlay_content>();
+                std::vector<attr_line_t> ov_lines;
+
+                this->lv_overlay_source->list_value_for_overlay(
+                    *this, oc.oc_main_line, ov_lines);
+                const auto& al = ov_lines[oc.oc_line];
+                auto line_sf = string_fragment::from_str(al.get_string());
+                auto cursor_sf = line_sf.sub_cell_range(
+                    this->lv_left + me.me_x, this->lv_left + me.me_x);
+                auto link_iter = find_string_attr_containing(
+                    al.get_attrs(), &VC_HYPERLINK, cursor_sf.sf_begin);
+                if (link_iter != al.get_attrs().end()) {
+                    auto href = link_iter->sa_value.get<std::string>();
+                    auto* ta = dynamic_cast<text_anchors*>(this->tc_sub_source);
+
+                    if (me.me_button == mouse_button_t::BUTTON_LEFT
+                        && ta != nullptr && startswith(href, "#")
+                        && !startswith(href, "#/frontmatter"))
+                    {
+                        auto row_opt = ta->row_for_anchor(href);
+
+                        if (row_opt.has_value()) {
+                            this->tc_sub_source->get_location_history() |
+                                [&oc](auto lh) {
+                                    lh->loc_history_append(oc.oc_main_line);
+                                };
+                            this->set_selection(row_opt.value());
+                        }
+                    }
+                }
+                if (this->tc_on_click) {
+                    this->tc_on_click(*this, al, cursor_sf.sf_begin);
+                }
             }
             if (this->tc_delegate != nullptr) {
                 this->tc_delegate->text_handle_mouse(*this, mouse_line, me);
@@ -748,6 +797,9 @@ textview_curses::apply_highlights(attr_line_t& al,
     }
 
     auto source_format = this->tc_sub_source->get_text_format();
+    if (source_format == text_format_t::TF_BINARY) {
+        return;
+    }
     for (const auto& tc_highlight : this->tc_highlights) {
         bool internal_hl
             = tc_highlight.first.first == highlight_source_t::INTERNAL
@@ -819,12 +871,11 @@ textview_curses::textview_value_for_row(vis_line_t row, attr_line_t& value_out)
         }
 
         if (sel_start <= row && row <= sel_end) {
-            auto role = this->get_overlay_selection()
+            auto role = (this->get_overlay_selection() || !this->vc_enabled)
                 ? this->tc_disabled_cursor_role.value()
                 : this->tc_cursor_role.value();
 
-            sa.emplace_back(line_range{orig_line.lr_start, -1},
-                            VC_ROLE.value(role));
+            sa.emplace_back(line_range{0, -1}, VC_ROLE.value(role));
         }
     }
 
@@ -838,10 +889,7 @@ textview_curses::textview_value_for_row(vis_line_t row, attr_line_t& value_out)
 
     const auto& user_marks = this->tc_bookmarks[&BM_USER];
     const auto& user_expr_marks = this->tc_bookmarks[&BM_USER_EXPR];
-    if (std::binary_search(user_marks.begin(), user_marks.end(), row)
-        || std::binary_search(
-            user_expr_marks.begin(), user_expr_marks.end(), row))
-    {
+    if (user_marks.bv_tree.exists(row) || user_expr_marks.bv_tree.exists(row)) {
         sa.emplace_back(line_range{orig_line.lr_start, -1},
                         VC_STYLE.value(text_attrs::with_reverse()));
     }
@@ -986,16 +1034,12 @@ textview_curses::set_user_mark(const bookmark_type_t* bm,
                                vis_line_t vl,
                                bool marked)
 {
-    bookmark_vector<vis_line_t>& bv = this->tc_bookmarks[bm];
-    bookmark_vector<vis_line_t>::iterator iter;
+    auto& bv = this->tc_bookmarks[bm];
 
     if (marked) {
         bv.insert_once(vl);
     } else {
-        iter = std::lower_bound(bv.begin(), bv.end(), vl);
-        if (iter != bv.end() && *iter == vl) {
-            bv.erase(iter);
-        }
+        bv.bv_tree.erase(vl);
     }
     if (this->tc_sub_source) {
         this->tc_sub_source->text_mark(bm, vl, marked);
@@ -1028,15 +1072,7 @@ textview_curses::toggle_user_mark(const bookmark_type_t* bm,
     }
     for (auto curr_line = start_line; curr_line <= end_line; ++curr_line) {
         auto& bv = this->tc_bookmarks[bm];
-        bool added;
-
-        auto iter = bv.insert_once(curr_line);
-        if (iter == bv.end()) {
-            added = true;
-        } else {
-            bv.erase(iter);
-            added = false;
-        }
+        auto [insert_iter, added] = bv.insert_once(curr_line);
         if (this->tc_sub_source) {
             this->tc_sub_source->text_mark(bm, curr_line, added);
         }
@@ -1099,6 +1135,7 @@ textview_curses::set_sub_source(text_sub_source* src)
 std::optional<line_info>
 textview_curses::grep_value_for_line(vis_line_t line, std::string& value_out)
 {
+    // log_debug("grep line %d", line);
     if (this->tc_sub_source
         && line < (int) this->tc_sub_source->text_line_count())
     {
@@ -1112,6 +1149,7 @@ textview_curses::grep_value_for_line(vis_line_t line, std::string& value_out)
             auto new_size = erase_ansi_escapes(value_out);
             value_out.resize(new_size);
         }
+        // log_debug("  line off %lld", retval.li_file_range.fr_offset);
         return retval;
     }
 

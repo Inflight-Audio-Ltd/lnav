@@ -52,7 +52,9 @@
 #include "highlighter.hh"
 #include "line_buffer.hh"
 #include "log_format_fwd.hh"
+#include "logfile.hh"
 #include "pcrepp/pcre2pp.hh"
+#include "robin_hood/robin_hood.h"
 #include "shared_buffer.hh"
 
 struct sqlite3;
@@ -142,6 +144,20 @@ struct logline_value_meta {
             return this->lvm_user_hidden.value();
         }
         return this->lvm_hidden;
+    }
+
+    bool is_numeric() const
+    {
+        if (this->lvm_identifier || this->lvm_foreign_key) {
+            return false;
+        }
+        switch (this->lvm_kind) {
+            case value_kind_t::VALUE_FLOAT:
+            case value_kind_t::VALUE_INTEGER:
+                return true;
+            default:
+                return false;
+        }
     }
 
     logline_value_meta& with_struct_name(intern_string_t name)
@@ -432,7 +448,8 @@ public:
     }
 
     struct scan_match {
-        uint32_t sm_quality;
+        uint32_t sm_quality{0};
+        uint32_t sm_strikes{0};
     };
 
     struct scan_no_match {
@@ -594,6 +611,8 @@ public:
         return intern_string_t::case_lt(lhs->get_name(), rhs->get_name());
     }
 
+    exttm tm_for_display(logfile::iterator ll, string_fragment sf);
+
     enum class subsecond_unit {
         milli,
         micro,
@@ -621,7 +640,8 @@ public:
     bool lf_is_self_describing{false};
     bool lf_time_ordered{true};
     bool lf_specialized{false};
-    std::optional<int64_t> lf_max_unrecognized_lines;
+    bool lf_level_hideable{true};
+    std::optional<uint64_t> lf_max_unrecognized_lines;
     std::map<const intern_string_t, std::shared_ptr<format_tag_def>>
         lf_tag_defs;
 

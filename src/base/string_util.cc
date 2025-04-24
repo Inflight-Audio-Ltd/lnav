@@ -31,6 +31,7 @@
 #include <iterator>
 #include <regex>
 #include <sstream>
+#include <string_view>
 
 #include "string_util.hh"
 
@@ -38,6 +39,8 @@
 #include "is_utf8.hh"
 #include "lnav_log.hh"
 #include "scn/scan.h"
+
+using namespace std::string_view_literals;
 
 void
 scrub_to_utf8(char* buffer, size_t length)
@@ -124,7 +127,9 @@ unquote_content(char* dst, const char* str, size_t len, char quote_char)
 size_t
 unquote(char* dst, const char* str, size_t len)
 {
-    if (str[0] == 'r' || str[0] == 'u') {
+    if (str[0] == 'f' || str[0] == 'r' || str[0] == 'u' || str[0] == 'R'
+        || str[0] == 'x' || str[0] == 'X')
+    {
         str += 1;
         len -= 1;
     }
@@ -277,11 +282,20 @@ abbreviate_str(char* str, size_t len, size_t max_len)
 void
 split_ws(const std::string& str, std::vector<std::string>& toks_out)
 {
-    std::stringstream ss(str);
-    std::string buf;
+    auto str_sf = string_fragment::from_str(str);
 
-    while (ss >> buf) {
-        toks_out.push_back(buf);
+    while (true) {
+        auto split_pair = str_sf.split_when(isspace);
+        if (split_pair.first.empty()) {
+            if (split_pair.second.empty()) {
+                break;
+            }
+            str_sf = split_pair.second;
+            continue;
+        }
+
+        toks_out.emplace_back(split_pair.first.to_string());
+        str_sf = split_pair.second;
     }
 }
 
@@ -321,9 +335,9 @@ is_blank(const std::string& str)
 std::string
 scrub_ws(const char* in, ssize_t len)
 {
-    static const std::string TAB_SYMBOL = "\u21e5";
-    static const std::string LF_SYMBOL = "\u240a";
-    static const std::string CR_SYMBOL = "\u240d";
+    static constexpr auto TAB_SYMBOL = "\u21e5"sv;
+    static constexpr auto LF_SYMBOL = "\u240a"sv;
+    static constexpr auto CR_SYMBOL = "\u240d"sv;
 
     std::string retval;
 
@@ -331,7 +345,7 @@ scrub_ws(const char* in, ssize_t len)
         retval.reserve(len);
     }
 
-    for (size_t lpc = 0; (len == -1 && in[lpc]) || (len >= 0 && lpc < len);
+    for (ssize_t lpc = 0; (len == -1 && in[lpc]) || (len >= 0 && lpc < len);
          lpc++)
     {
         auto ch = in[lpc];
