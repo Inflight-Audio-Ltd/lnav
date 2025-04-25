@@ -18,7 +18,7 @@ export PKG := $(NAME)_$(VERSION)_$(ARCH).deb
 CFG = $(wildcard scripts/*.template)
 TGS = $(CFG:scripts/%.template=$(NAME)/DEBIAN/%)
 BIN = $(NAME)/usr/local/bin/$(NAME)
-HLP = $(NAME)/usr/share/doc/lnav/help.txt.gz
+HLP = $(NAME)/usr/share/doc/lnav/help.md.gz
 MAN = $(NAME)/usr/share/man/man1/lnav.1.gz
 
 build: $(PKG)
@@ -30,7 +30,7 @@ $(BIN): $(SRC)
 	cp $? $@
 	strip -s $@
 
-$(HLP): ../src/help.txt
+$(HLP): ../src/help.md
 	@mkdir -p $(shell dirname $@)
 	cp $? $(shell dirname $@)/
 	gzip $(subst .gz,,$@)
