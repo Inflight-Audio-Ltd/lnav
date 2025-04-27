@@ -12,6 +12,8 @@ export VERSION := $(shell $(SRC) --version | cut -d' ' -f2 | cut -d'-' -f1,2 | s
 
 export PKG := $(NAME)_$(VERSION)_$(ARCH).deb
 
+FAKEROOT := $(shell [ "$$(id -u)" -eq 0 ] && echo "" || echo fakeroot)
+
 
 .PHONY: build clean fake-push
 
@@ -55,7 +57,7 @@ clean:
 	rm -rf $(NAME) *.deb 2>/dev/null
 
 $(PKG): $(ALL)
-	fakeroot dpkg-deb -Zxz -b $(NAME) $(PKG)
+	$(FAKEROOT) dpkg-deb -Zxz -b $(NAME) $(PKG)
 
 push: $(PKG)
 	curl -u "apt-master:inflight28a-aptmaster" -H "Content-Type: multipart/form-data" --data-binary "@$(PKG)" "https://nexus.everhub.aero/repository/ifd-apt/"
