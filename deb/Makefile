@@ -31,7 +31,7 @@ build: $(PKG)
 
 
 $(BIN): $(SRC)
-	@mkdir -p $(shell dirname $@)
+	@mkdir -p $(@D)
 	cp $? $@
 	strip -s $@
 
