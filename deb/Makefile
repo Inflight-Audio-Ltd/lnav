@@ -8,7 +8,10 @@ else
 	ARCH := all
 endif
 export ARCH
-export VERSION := $(shell $(SRC) --version | cut -d' ' -f2 | cut -d'-' -f1,2 | sed 's/-dirty//')
+
+VER := $(shell git tag --sort=-v:refname | head -n 1 | sed 's/[v]\?\([0-9.]\+\)-.*/\1/')
+BLD ?= $(or $(BUILDNO),0)
+export VERSION := $(VER)-$(BLD)
 
 export PKG := $(NAME)_$(VERSION)_$(ARCH).deb
 
