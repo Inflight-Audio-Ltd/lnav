@@ -68,6 +68,9 @@ EOF
 EOF
 
   run_cap_test ${lnav_test} -n ${test_dir}/dhcp-trunc.pcapng
+
+  gunzip -c ${test_dir}/capture.btsnoop.gz > capture.btsnoop
+  run_cap_test ${lnav_test} -n -c ':goto 790' capture.btsnoop
 fi
 
 
@@ -611,6 +614,8 @@ info 0x0
 info 0x0
 error 0x0
 EOF
+
+run_cap_test ./drive_logfile -t -f logfmt_log ${srcdir}/logfile_grafana.0
 
 run_test ${lnav_test} -C ${test_dir}/logfile_bad_access_log.0
 

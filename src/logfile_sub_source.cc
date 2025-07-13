@@ -242,6 +242,7 @@ logfile_sub_source::text_value_for_line(textview_curses& tc,
 {
     if (this->lss_indexing_in_progress) {
         value_out = "";
+        this->lss_token_attrs.clear();
         return {};
     }
 
@@ -2802,6 +2803,7 @@ logfile_sub_source::text_crumbs_for_line(int line,
     crumbs.back().c_search_placeholder = "(Enter an absolute or relative time)";
 
     auto format_name = format->get_name().to_string();
+
     crumbs.emplace_back(
         format_name,
         attr_line_t().append(format_name),
@@ -2879,6 +2881,9 @@ logfile_sub_source::text_crumbs_for_line(int line,
 
     lf->read_full_message(msg_start_iter, sbr);
     attr_line_t al(to_string(sbr));
+    if (!sbr.get_metadata().m_valid_utf) {
+        scrub_to_utf8(&al.al_string[0], al.al_string.length());
+    }
     if (sbr.get_metadata().m_has_ansi) {
         // bleh
         scrub_ansi_string(al.get_string(), &al.al_attrs);
@@ -3288,8 +3293,23 @@ logfile_sub_source::text_size_for_line(textview_curses& tc,
 
         this->text_value_for_line(tc, row, value, flags);
         scrub_ansi_string(value, nullptr);
-        this->lss_line_size_cache[index].second
-            = string_fragment::from_str(value).column_width();
+        auto line_width = string_fragment::from_str(value).column_width();
+        if (this->lss_line_context == line_context_t::time_column) {
+            auto time_attr
+                = find_string_attr(this->lss_token_attrs, &L_TIMESTAMP);
+            if (time_attr != this->lss_token_attrs.end()) {
+                line_width -= time_attr->sa_range.length();
+                auto format = this->lss_token_file->get_format();
+                if (format->lf_level_hideable) {
+                    auto level_attr
+                        = find_string_attr(this->lss_token_attrs, &L_LEVEL);
+                    if (level_attr != this->lss_token_attrs.end()) {
+                        line_width -= level_attr->sa_range.length();
+                    }
+                }
+            }
+        }
+        this->lss_line_size_cache[index].second = line_width;
         this->lss_line_size_cache[index].first = row;
     }
     return this->lss_line_size_cache[index].second;

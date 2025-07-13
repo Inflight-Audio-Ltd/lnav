@@ -482,6 +482,8 @@ textview_curses::handle_mouse(mouse_event& me)
             mouse_line.match(
                 [this, &me, sub_delegate, &mouse_line](const main_content& mc) {
                     this->tc_text_selection_active = true;
+                    this->tc_press_left = this->lv_left
+                        + mc.mc_line_range.lr_start + me.me_press_x;
                     if (this->vc_enabled) {
                         if (this->tc_supports_marks
                             && me.me_button == mouse_button_t::BUTTON_LEFT
@@ -528,8 +530,10 @@ textview_curses::handle_mouse(mouse_event& me)
                             auto line_sf
                                 = string_fragment::from_str(al.get_string());
                             auto cursor_sf = line_sf.sub_cell_range(
-                                this->lv_left + me.me_x,
-                                this->lv_left + me.me_x);
+                                this->lv_left + mc.mc_line_range.lr_start
+                                    + me.me_x,
+                                this->lv_left + mc.mc_line_range.lr_start
+                                    + me.me_x);
                             auto ds = data_scanner(line_sf);
                             auto tf = this->tc_sub_source->get_text_format();
                             while (true) {
@@ -598,10 +602,14 @@ textview_curses::handle_mouse(mouse_event& me)
                 if (mouse_line.is<main_content>()) {
                     auto& mc = mouse_line.get<main_content>();
                     attr_line_t al;
-                    auto low_x = std::min(this->tc_press_left,
-                                          (int) this->lv_left + me.me_x);
-                    auto high_x = std::max(this->tc_press_left,
-                                           (int) this->lv_left + me.me_x);
+                    auto low_x
+                        = std::min(this->tc_press_left,
+                                   (int) this->lv_left
+                                       + mc.mc_line_range.lr_start + me.me_x);
+                    auto high_x
+                        = std::max(this->tc_press_left,
+                                   (int) this->lv_left
+                                       + mc.mc_line_range.lr_start + me.me_x);
 
                     this->set_selection_without_context(mc.mc_line);
                     if (this->tc_supports_marks
@@ -689,16 +697,16 @@ textview_curses::handle_mouse(mouse_event& me)
                 if (this->tc_selection_start) {
                     this->toggle_user_mark(&BM_USER,
                                            this->tc_selection_start.value(),
-                                           this->get_selection());
+                                           this->get_selection().value());
                     this->reload_data();
                 }
                 this->tc_selection_start = std::nullopt;
             }
             if (mouse_line.is<main_content>()) {
-                const auto& [mc_line] = mouse_line.get<main_content>();
+                const auto mc = mouse_line.get<main_content>();
                 attr_line_t al;
 
-                this->textview_value_for_row(mc_line, al);
+                this->textview_value_for_row(mc.mc_line, al);
                 auto line_sf = string_fragment::from_str(al.get_string());
                 auto cursor_sf = line_sf.sub_cell_range(
                     this->lv_left + me.me_x, this->lv_left + me.me_x);
@@ -720,7 +728,7 @@ textview_curses::handle_mouse(mouse_event& me)
                     } else {
                         this->tc_selected_text = selected_text_info{
                             me.me_x,
-                            mc_line,
+                            mc.mc_line,
                             link_iter->sa_range,
                             al.get_attrs(),
                             al.to_string_fragment(link_iter).to_string(),
@@ -861,7 +869,7 @@ textview_curses::textview_value_for_row(vis_line_t row, attr_line_t& value_out)
     {
         vis_line_t sel_start, sel_end;
 
-        sel_start = sel_end = this->get_selection();
+        sel_start = sel_end = this->get_selection().value_or(0_vl);
         if (this->tc_selection_start) {
             if (this->tc_selection_start.value() < sel_end) {
                 sel_start = this->tc_selection_start.value();
@@ -1169,8 +1177,8 @@ text_sub_source::scroll_invoked(textview_curses* tc)
 void
 text_time_translator::ttt_scroll_invoked(textview_curses* tc)
 {
-    if (tc->get_inner_height() > 0 && tc->get_selection() >= 0_vl) {
-        this->time_for_row(tc->get_selection()) |
+    if (tc->get_inner_height() > 0 && tc->get_selection()) {
+        this->time_for_row(tc->get_selection().value()) |
             [this](auto new_top_ri) { this->ttt_top_row_info = new_top_ri; };
     }
 }

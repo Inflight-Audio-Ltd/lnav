@@ -33,8 +33,6 @@
 
 #include "lnav.prompt.hh"
 
-#include <glob.h>
-
 #include "base/fs_util.hh"
 #include "base/humanize.network.hh"
 #include "base/itertools.hh"
@@ -523,7 +521,8 @@ prompt::rl_completion(textinput_curses& tc)
 
     this->p_in_completion = true;
     const auto& al
-        = tc.tc_popup_source.get_lines()[tc.tc_popup.get_selection()].tl_value;
+        = tc.tc_popup_source.get_lines()[tc.tc_popup.get_selection().value()]
+              .tl_value;
     auto sub = get_string_attr(al.al_attrs, SUBST_TEXT)->get();
     tc.tc_selection = tc.tc_complete_range;
     tc.replace_selection(sub);
@@ -553,7 +552,8 @@ prompt::rl_popup_change(textinput_curses& tc)
     }
 
     const auto& al
-        = tc.tc_popup_source.get_lines()[tc.tc_popup.get_selection()].tl_value;
+        = tc.tc_popup_source.get_lines()[tc.tc_popup.get_selection().value()]
+              .tl_value;
     auto sub = get_string_attr(al.al_attrs, SUBST_TEXT)->get();
     tc.tc_selection
         = tc.clamp_selection(textinput_curses::selected_range::from_key(
@@ -943,12 +943,13 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
             case help_parameter_format_t::HPF_LINE_TAG: {
                 auto* lss
                     = dynamic_cast<logfile_sub_source*>(tc.get_sub_source());
+                auto sel = tc.get_selection();
 
-                if (lss == nullptr || tc.get_inner_height() == 0) {
+                if (lss == nullptr || tc.get_inner_height() == 0 || !sel) {
                     return {};
                 }
 
-                auto bm_opt = lss->find_bookmark_metadata(tc.get_selection());
+                auto bm_opt = lss->find_bookmark_metadata(sel.value());
                 if (!bm_opt) {
                     return {};
                 }
@@ -1161,11 +1162,12 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
 
                 auto* tss = tc.get_sub_source();
                 auto* ttt = dynamic_cast<text_time_translator*>(tss);
-                if (ttt == nullptr || !tss->tss_supports_filtering) {
+                auto sel = tc.get_selection();
+                if (ttt == nullptr || !tss->tss_supports_filtering || !sel) {
                     return {};
                 }
 
-                auto ri_opt = ttt->time_for_row(tc.get_selection());
+                auto ri_opt = ttt->time_for_row(sel.value());
                 if (!ri_opt) {
                     return {};
                 }
@@ -1309,11 +1311,12 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
 
                 auto* tss = tc.get_sub_source();
                 auto* ttt = dynamic_cast<text_time_translator*>(tss);
-                if (ttt == nullptr || !tss->tss_supports_filtering) {
+                auto sel = tc.get_selection();
+                if (ttt == nullptr || !tss->tss_supports_filtering || !sel) {
                     return {};
                 }
 
-                auto ri_opt = ttt->time_for_row(tc.get_selection());
+                auto ri_opt = ttt->time_for_row(sel.value());
                 if (!ri_opt) {
                     return {};
                 }
@@ -1568,7 +1571,7 @@ prompt::get_regex_suggestion(textview_curses& tc,
         }
     });
 
-    if (retval.empty()) {
+    if (retval.empty() && tc.get_inner_height() > 0) {
         auto md = lnav::pcre2pp::match_data::unitialized();
         for (auto curr_line = tc.get_top(); curr_line <= tc.get_bottom();
              ++curr_line)

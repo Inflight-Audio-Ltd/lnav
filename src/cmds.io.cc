@@ -1480,13 +1480,15 @@ com_close(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
         } else {
             auto& lss = lnav_data.ld_log_source;
             auto vl = tc->get_selection();
-            auto cl = lss.at(vl);
-            auto lf = lss.find(cl);
+            if (vl) {
+                auto cl = lss.at(vl.value());
+                auto lf = lss.find(cl);
 
-            actual_path_v.push_back(lf->get_actual_path());
-            fn_v.emplace_back(lf->get_filename());
-            if (!ec.ec_dry_run) {
-                lnav_data.ld_active_files.request_close(lf);
+                actual_path_v.push_back(lf->get_actual_path());
+                fn_v.emplace_back(lf->get_filename());
+                if (!ec.ec_dry_run) {
+                    lnav_data.ld_active_files.request_close(lf);
+                }
             }
         }
     } else {
@@ -1507,6 +1509,8 @@ com_close(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
                 if (actual_path) {
                     lnav_data.ld_active_files.fc_file_names.erase(
                         actual_path.value().string());
+                    lnav_data.ld_active_files.fc_closed_files.insert(
+                        actual_path->string());
                 }
                 lnav_data.ld_active_files.fc_closed_files.insert(fn);
             }
@@ -1642,9 +1646,9 @@ com_pipe_to(exec_context& ec,
                 if (tc->get_inner_height() == 0) {
                     // Nothing to do
                 } else if (tc == &lnav_data.ld_views[LNV_LOG]) {
-                    logfile_sub_source& lss = lnav_data.ld_log_source;
-                    content_line_t cl = lss.at(tc->get_top());
-                    std::shared_ptr<logfile> lf = lss.find(cl);
+                    auto& lss = lnav_data.ld_log_source;
+                    auto cl = lss.at(tc->get_top());
+                    auto lf = lss.find(cl);
                     shared_buffer_ref sbr;
                     lf->read_full_message(lf->message_start(lf->begin() + cl),
                                           sbr);
