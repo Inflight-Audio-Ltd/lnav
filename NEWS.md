@@ -1,48 +1,4 @@
 
-## lnav v0.14.0
-
-Features:
-* Log formats can now specify source file/line and thread
-  ID with the `src-file-field`, `src-line-field`, and
-  `thread-id-field` properties. These fields can then be
-  accessed in the SQL vtables as `log_src_file`,
-  `log_src_line`, and `log_thread_id`.
-* The `all_opids` and `all_thread_ids` virtual tables
-  have been added to make it simple to discover all of
-  the operations and threads across all log files.
-* The `:xopen` command will now open text files in an
-  external editor.  To open the file at a particular
-  line/column, add a URL fragment of the form
-  `L<line>C<column>`.
-* When opening the contents of the prompt in an external
-  editor (`CTRL+O`), the cursor position will be preserved,
-  if possible.
-* The `external-editor` configuration has been expanded
-  with extra properties to help lnav choose the right one
-  to use:
-  - The `config-dir` property specifies the name of the
-    directory that stores the editor's configuration in a
-    source tree.  If the directory is found in an ancestor
-    of the path to be opened, and it has the most recent
-    modified time, the associated editor will be used.
-  - The `prefers` property is a regular expression that
-    will be tested against the full path to be opened.
-    If matched, that editor will be chosen.
-* The `:breakpoint`, `:toggle-breakpoint`, and
-  `:clear-breakpoints` commands have been added to support
-  setting/clearing breakpoints for log messages.  The
-  `CTRL-B` shortcut toggles a breakpoint on the focused
-  line in the LOG view.  Also, if the log format specifies
-  source file/line fields, the first character of the
-  source file will be underlined and can be clicked to
-  toggle a breakpoint.  Once breakpoints have been added,
-  you can press `F7`/`F8` to move to the previous/next log
-  message that matches a breakpoint.
-* The `:external-access` command has been added to open a
-  localhost HTTP port that can be used to remotely control
-  lnav. Requests can be sent to execute commands and poll
-  for changes in the view state.
-
 ## lnav v0.13.2
 
 Bug Fixes:

@@ -1012,7 +1012,6 @@ struct refresh_status_bars {
         {
             prompt.p_editor.set_inactive_value(cancel_msg);
         }
-
         if (!lnav_data.ld_log_source.is_indexing_in_progress()
             || lnav_data.ld_log_source.lss_index_generation == 0)
         {

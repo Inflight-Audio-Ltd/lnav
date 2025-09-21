@@ -1,4 +1,4 @@
-AC_INIT([lnav],[0.14.0],[lnav@googlegroups.com],[lnav],[http://lnav.org])
+AC_INIT([lnav],[0.13.2],[lnav@googlegroups.com],[lnav],[http://lnav.org])
 AC_CONFIG_SRCDIR([src/lnav.cc])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([foreign subdir-objects])
@@ -68,7 +68,6 @@ AC_PATH_PROG(XZ_CMD, [xz])
 AC_PATH_PROG(TSHARK_CMD, [tshark])
 AC_PATH_PROG(CHECK_JSONSCHEMA, [check-jsonschema])
 AC_PATH_PROG(WINDRES, [windres])
-AC_PATH_PROG(CXXBRIDGE, [cxxbridge])
 
 AC_CHECK_SIZEOF(off_t)
 AC_CHECK_SIZEOF(size_t)
@@ -134,16 +133,6 @@ AS_IF([test "x$with_system_doctest" != "xyes"], [
     CPPFLAGS="-I\$(top_srcdir)/src/third-party/doctest-root $CPPFLAGS"
 ])
 
-AC_ARG_WITH([cargo],
-    AS_HELP_STRING(
-        [--without-cargo],
-        [Skip the Rust extensions]
-    ),
-    AS_IF([test "x$with_cargo" = "xno"], [
-        CARGO_CMD=""
-    ]),
-    []
-)
 
 LNAV_WITH_JEMALLOC
 
@@ -288,9 +277,7 @@ AS_CASE(["$host_os"],
 
 saved_location=$(pwd)
 cd $srcdir
-version=$(echo \
-    $(git describe --abbrev=7 --dirty --always --tags --match="v${PACKAGE_VERSION}*" 2>/dev/null) | \
-    sed -e 's/^\([[0-9a-f]]\)/'${PACKAGE_VERSION}'-\1/g' -e 's/^v//' 2>/dev/null)
+version=$(echo $(git describe --abbrev=7 --dirty --always --tags 2>/dev/null) | sed -e 's/^v//' 2>/dev/null)
 cd $saved_location
 AS_IF([test $? -eq 0],
     [version=$(echo $version | tr -d '\n')
@@ -304,7 +291,6 @@ AM_CONDITIONAL(HAVE_LIBCURL, test x"$LIBCURL" != x"")
 AM_CONDITIONAL([CROSS_COMPILING], [ test x"$cross_compiling" != x"no" ])
 AM_CONDITIONAL(HAVE_CHECK_JSONSCHEMA, test x"$CHECK_JSONSCHEMA" != x"")
 AM_CONDITIONAL(HAVE_WINDRES, test x"$WINDRES" != x"" && test "x$ac_cv_header_windows_h" != x"no")
-AM_CONDITIONAL(HAVE_CXXBRIDGE, test x"$CXXBRIDGE" != x"")
 
 AS_VAR_SET(USER_CXXFLAGS, ["$CXXFLAGS"])
 AC_SUBST(USER_CXXFLAGS)
