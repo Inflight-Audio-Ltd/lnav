@@ -90,7 +90,7 @@ public:
 
     void get_subline(const logline& ll,
                      shared_buffer_ref& sbr,
-                     bool full_message) override
+                     subline_options opts) override
     {
         this->plf_cached_line.resize(TIMESTAMP_SIZE);
         auto tlen = sql_strftime(this->plf_cached_line.data(),
@@ -145,30 +145,28 @@ public:
     {
         static const pcre_format log_fmt[] = {
             pcre_format(
-                "^(?:\\*\\*\\*\\s+)?(?<timestamp>@[0-9a-zA-Z]{16,24})(.*)"),
+                R"(^(?:\*\*\*\s+)?(?<timestamp>@[0-9a-zA-Z]{16,24}))"),
             pcre_format(
-                R"(^(?:\*\*\*\s+)?(?<timestamp>(?:\s|\d{4}[\-\/]\d{2}[\-\/]\d{2}|T|\d{1,2}:\d{2}(?::\d{2}(?:[\.,]\d{1,6})?)?|Z|[+\-]\d{2}:?\d{2}|(?!DBG|ERR|INFO|WARN|NONE)[A-Z]{3,4})+)(?:\s+|[:|])([^:]+))"),
+                R"(^(?:\*\*\*\s+)?(?<timestamp>(?:\s|\d{4}[\-\/]\d{2}[\-\/]\d{2}|T|\d{1,2}:\d{2}(?::\d{2}(?:[\.,]\d{1,6})?)?|Z|[+\-]\d{2}:?\d{2}|(?!DBG|DEBUG|ERR|INFO|WARN|NONE)[A-Z]{3,4})+)[:|\s]?(trc|trace|dbg|debug|info|warn(?:ing)?|err(?:or)?)[:|\s]\s*)"),
             pcre_format(
-                "^(?:\\*\\*\\*\\s+)?(?<timestamp>[\\w:+/\\.-]+) \\[\\w (.*)"),
-            pcre_format("^(?:\\*\\*\\*\\s+)?(?<timestamp>[\\w:,/\\.-]+) (.*)"),
-            pcre_format(
-                "^(?:\\*\\*\\*\\s+)?(?<timestamp>[\\w:,/\\.-]+) - (.*)"),
-            pcre_format(
-                "^(?:\\*\\*\\*\\s+)?(?<timestamp>[\\w: \\.,/-]+) - (.*)"),
+                R"(^(?:\*\*\*\s+)?(?<timestamp>[\w:+/\.-]+) \[\w\s+)"),
+            pcre_format(R"(^(?:\*\*\*\s+)?(?<timestamp>[\w:+,/\.-]+)\s+)"),
+            pcre_format(R"(^(?:\*\*\*\s+)?(?<timestamp>[\w:+,/\.-]+) -\s+)"),
+            pcre_format(R"(^(?:\*\*\*\s+)?(?<timestamp>[\w:+ \.,/-]+) -\s+)"),
             pcre_format("^(?:\\*\\*\\*\\s+)?(?<timestamp>[\\w: "
-                        "\\.,/-]+)\\[[^\\]]+\\](.*)"),
-            pcre_format("^(?:\\*\\*\\*\\s+)?(?<timestamp>[\\w: \\.,/-]+) (.*)"),
+                        "\\.,/-]+)\\[[^\\]]+\\]\\s+"),
+            pcre_format(R"(^(?:\*\*\*\s+)?(?<timestamp>[\w:+ \.,/-]+)\s+)"),
 
             pcre_format(
-                R"(^(?:\*\*\*\s+)?\[(?<timestamp>[\w: \.,+/-]+)\]\s*(\w+):?)"),
+                R"(^(?:\*\*\*\s+)?\[(?<timestamp>[\w:+ \.,+/-]+)\] \[(trace|debug|info|warn(?:ing)?|error|critical)\]\s+)"),
             pcre_format(
-                "^(?:\\*\\*\\*\\s+)?\\[(?<timestamp>[\\w: \\.,+/-]+)\\] (.*)"),
+                R"(^(?:\*\*\*\s+)?\[(?<timestamp>[\w:+ \.,+/-]+)\]\s*(\w+):?\s+)"),
+            pcre_format(
+                R"(^(?:\*\*\*\s+)?\[(?<timestamp>[\w:+ \.,+/-]+)\]\s+)"),
             pcre_format("^(?:\\*\\*\\*\\s+)?\\[(?<timestamp>[\\w: "
-                        "\\.,+/-]+)\\] \\[(\\w+)\\]"),
-            pcre_format("^(?:\\*\\*\\*\\s+)?\\[(?<timestamp>[\\w: "
-                        "\\.,+/-]+)\\] \\w+ (.*)"),
+                        "\\.,+/-]+)\\] \\w+\\s+"),
             pcre_format("^(?:\\*\\*\\*\\s+)?\\[(?<timestamp>[\\w: ,+/-]+)\\] "
-                        "\\(\\d+\\) (.*)"),
+                        "\\(\\d+\\)\\s+"),
 
             pcre_format(),
         };
@@ -260,6 +258,9 @@ public:
                           .count();
             }
 
+            auto tid_iter = sbc.sbc_tids.insert_tid(
+                sbc.sbc_allocator, string_fragment{}, log_tv);
+            tid_iter->second.titr_level_stats.update_msg_count(level_val);
             dst.emplace_back(li.li_file_range.fr_offset, log_tv, level_val);
             return scan_match{5};
         }
@@ -273,12 +274,13 @@ public:
                   logline_value_vector& values,
                   bool annotate_module) const override
     {
+        thread_local auto md = lnav::pcre2pp::match_data::unitialized();
         auto& line = values.lvv_sbr;
         int pat_index = this->pattern_index_for_line(line_number);
         const auto& fmt = get_pcre_log_formats()[pat_index];
         int prefix_len = 0;
-        auto md = fmt.pcre->create_match_data();
-        auto match_res = fmt.pcre->capture_from(line.to_string_fragment())
+        const auto line_sf = line.to_string_fragment();
+        auto match_res = fmt.pcre->capture_from(line_sf)
                              .into(md)
                              .matches(PCRE2_NO_UTF_CHECK)
                              .ignore_error();
@@ -293,14 +295,12 @@ public:
         values.lvv_values.emplace_back(TS_META, line, lr);
         values.lvv_values.back().lv_meta.lvm_format = (log_format*) this;
 
-        prefix_len = ts_cap.sf_end;
+        prefix_len = md[0]->sf_end;
         auto level_cap = md[2];
         if (level_cap) {
             if (string2level(level_cap->data(), level_cap->length(), true)
                 != LEVEL_UNKNOWN)
             {
-                prefix_len = level_cap->sf_end;
-
                 values.lvv_values.emplace_back(
                     LEVEL_META, line, to_line_range(level_cap->trim()));
                 values.lvv_values.back().lv_meta.lvm_format
@@ -1045,7 +1045,7 @@ public:
 
     void get_subline(const logline& ll,
                      shared_buffer_ref& sbr,
-                     bool full_message) override
+                     subline_options opts) override
     {
     }
 
@@ -1231,8 +1231,129 @@ public:
         intern_string_t fs_struct_name;
     };
 
-    static const std::vector<field_def> KNOWN_FIELDS;
-    const static std::vector<field_to_struct_t> KNOWN_STRUCT_FIELDS;
+    static const std::array<field_def, 16>& get_known_fields()
+    {
+        static size_t KNOWN_FIELD_INDEX = 0;
+        static const std::array<field_def, 16> RETVAL = {
+            field_def{
+                KNOWN_FIELD_INDEX++,
+                "cs-method",
+                value_kind_t::VALUE_TEXT,
+                true,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "c-ip",
+                value_kind_t::VALUE_TEXT,
+                true,
+                false,
+                "ipaddress",
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "cs-bytes",
+                value_kind_t::VALUE_INTEGER,
+                false,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "cs-host",
+                value_kind_t::VALUE_TEXT,
+                true,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "cs-uri-stem",
+                value_kind_t::VALUE_TEXT,
+                true,
+                false,
+                "naturalnocase",
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "cs-uri-query",
+                value_kind_t::VALUE_TEXT,
+                false,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "cs-username",
+                value_kind_t::VALUE_TEXT,
+                false,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "cs-version",
+                value_kind_t::VALUE_TEXT,
+                true,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "s-ip",
+                value_kind_t::VALUE_TEXT,
+                true,
+                false,
+                "ipaddress",
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "s-port",
+                value_kind_t::VALUE_INTEGER,
+                true,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "s-computername",
+                value_kind_t::VALUE_TEXT,
+                true,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "s-sitename",
+                value_kind_t::VALUE_TEXT,
+                true,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "sc-bytes",
+                value_kind_t::VALUE_INTEGER,
+                false,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "sc-status",
+                value_kind_t::VALUE_INTEGER,
+                false,
+                true,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "sc-substatus",
+                value_kind_t::VALUE_INTEGER,
+                false,
+            },
+            {
+                KNOWN_FIELD_INDEX++,
+                "time-taken",
+                value_kind_t::VALUE_FLOAT,
+                false,
+            },
+        };
+
+        return RETVAL;
+    }
+
+    static const std::array<field_to_struct_t, 4>& get_known_struct_fields()
+    {
+        static const std::array<field_to_struct_t, 4> RETVAL = {
+            field_to_struct_t{"cs(", "cs_headers"},
+            {"sc(", "sc_headers"},
+            {"rs(", "rs_headers"},
+            {"sr(", "sr_headers"},
+        };
+
+        return RETVAL;
+    }
 
     w3c_log_format()
     {
@@ -1243,7 +1364,7 @@ public:
 
     const intern_string_t get_name() const override
     {
-        static const intern_string_t name(intern_string::lookup("w3c"));
+        static const intern_string_t name(intern_string::lookup("w3c_log"));
 
         return this->wlf_format_name.empty() ? name : this->wlf_format_name;
     }
@@ -1393,6 +1514,8 @@ public:
     {
         static const auto* W3C_LOG_NAME = intern_string::lookup("w3c_log");
         static const auto* X_FIELDS_NAME = intern_string::lookup("x_fields");
+        static const auto& KNOWN_FIELDS = get_known_fields();
+        static const auto& KNOWN_STRUCT_FIELDS = get_known_struct_fields();
         static auto X_FIELDS_IDX = 0;
 
         if (li.li_partial) {
@@ -1693,7 +1816,7 @@ public:
 
         void get_columns(std::vector<vtab_column>& cols) const override
         {
-            for (const auto& fd : KNOWN_FIELDS) {
+            for (const auto& fd : get_known_fields()) {
                 auto type_pair = log_vtab_impl::logline_value_to_sqlite_type(
                     fd.fd_meta.lvm_kind);
 
@@ -1708,7 +1831,7 @@ public:
             cols.back().with_comment(
                 "A JSON-object that contains fields that are not first-class "
                 "columns");
-            for (const auto& fs : KNOWN_STRUCT_FIELDS) {
+            for (const auto& fs : get_known_struct_fields()) {
                 cols.emplace_back(fs.fs_struct_name.to_string());
             }
         };
@@ -1718,7 +1841,7 @@ public:
         {
             this->log_vtab_impl::get_foreign_keys(keys_inout);
 
-            for (const auto& fd : KNOWN_FIELDS) {
+            for (const auto& fd : get_known_fields()) {
                 if (fd.fd_meta.lvm_identifier || fd.fd_meta.lvm_foreign_key) {
                     keys_inout.emplace(fd.fd_meta.lvm_name.to_string());
                 }
@@ -1756,7 +1879,7 @@ public:
 
     void get_subline(const logline& ll,
                      shared_buffer_ref& sbr,
-                     bool full_message) override
+                     subline_options opts) override
     {
     }
 
@@ -1771,121 +1894,6 @@ std::unordered_map<const intern_string_t, logline_value_meta>
 const intern_string_t w3c_log_format::F_DATE = intern_string::lookup("date");
 const intern_string_t w3c_log_format::F_TIME = intern_string::lookup("time");
 
-static size_t KNOWN_FIELD_INDEX = 0;
-const std::vector<w3c_log_format::field_def> w3c_log_format::KNOWN_FIELDS = {
-    {
-        KNOWN_FIELD_INDEX++,
-        "cs-method",
-        value_kind_t::VALUE_TEXT,
-        true,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "c-ip",
-        value_kind_t::VALUE_TEXT,
-        true,
-        false,
-        "ipaddress",
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "cs-bytes",
-        value_kind_t::VALUE_INTEGER,
-        false,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "cs-host",
-        value_kind_t::VALUE_TEXT,
-        true,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "cs-uri-stem",
-        value_kind_t::VALUE_TEXT,
-        true,
-        false,
-        "naturalnocase",
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "cs-uri-query",
-        value_kind_t::VALUE_TEXT,
-        false,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "cs-username",
-        value_kind_t::VALUE_TEXT,
-        false,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "cs-version",
-        value_kind_t::VALUE_TEXT,
-        true,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "s-ip",
-        value_kind_t::VALUE_TEXT,
-        true,
-        false,
-        "ipaddress",
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "s-port",
-        value_kind_t::VALUE_INTEGER,
-        true,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "s-computername",
-        value_kind_t::VALUE_TEXT,
-        true,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "s-sitename",
-        value_kind_t::VALUE_TEXT,
-        true,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "sc-bytes",
-        value_kind_t::VALUE_INTEGER,
-        false,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "sc-status",
-        value_kind_t::VALUE_INTEGER,
-        false,
-        true,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "sc-substatus",
-        value_kind_t::VALUE_INTEGER,
-        false,
-    },
-    {
-        KNOWN_FIELD_INDEX++,
-        "time-taken",
-        value_kind_t::VALUE_FLOAT,
-        false,
-    },
-};
-
-const std::vector<w3c_log_format::field_to_struct_t>
-    w3c_log_format::KNOWN_STRUCT_FIELDS = {
-        {"cs(", "cs_headers"},
-        {"sc(", "sc_headers"},
-        {"rs(", "rs_headers"},
-        {"sr(", "sr_headers"},
-};
-
 struct logfmt_pair_handler {
     explicit logfmt_pair_handler(date_time_scanner& dts) : lph_dt_scanner(dts)
     {
@@ -1893,7 +1901,9 @@ struct logfmt_pair_handler {
 
     log_format::scan_result_t process_value(const string_fragment& value_frag)
     {
-        if (this->lph_key_frag.is_one_of("timestamp", "time", "ts", "t")) {
+        if (this->lph_key_frag.is_one_of(
+                "timestamp"_frag, "time"_frag, "ts"_frag, "t"_frag))
+        {
             if (!this->lph_dt_scanner.scan(value_frag.data(),
                                            value_frag.length(),
                                            nullptr,
@@ -1907,7 +1917,7 @@ struct logfmt_pair_handler {
             this->lph_dt_scanner.ftime(
                 buf, sizeof(buf), nullptr, this->lph_time_tm);
             this->lph_found_time = true;
-        } else if (this->lph_key_frag == "level"_frag) {
+        } else if (this->lph_key_frag.is_one_of("level"_frag, "lvl"_frag)) {
             this->lph_level
                 = string2level(value_frag.data(), value_frag.length());
         }
@@ -2067,18 +2077,21 @@ public:
                   logline_value_vector& values,
                   bool annotate_module) const override
     {
-        static const auto FIELDS_NAME = intern_string::lookup("fields");
+        static const intern_string_t FIELDS_NAME
+            = intern_string::lookup("fields");
 
         auto& sbr = values.lvv_sbr;
         auto p = logfmt::parser(sbr.to_string_fragment());
-        bool done = false;
+        auto done = false;
+        auto found_body = false;
 
         while (!done) {
             auto parse_result = p.step();
 
             done = parse_result.match(
                 [](const logfmt::parser::end_of_input&) { return true; },
-                [this, &sa, &values](const logfmt::parser::kvpair& kvp) {
+                [this, &sa, &values, &found_body](
+                    const logfmt::parser::kvpair& kvp) {
                     auto value_frag = kvp.second.match(
                         [this, &kvp, &values](
                             const logfmt::parser::bool_value& bv) {
@@ -2131,12 +2144,19 @@ public:
                     auto value_lr
                         = line_range{value_frag.sf_begin, value_frag.sf_end};
 
-                    if (kvp.first.is_one_of("timestamp", "time", "ts", "t")) {
+                    auto known_field = false;
+                    if (kvp.first.is_one_of(
+                            "timestamp"_frag, "time"_frag, "ts"_frag, "t"_frag))
+                    {
                         sa.emplace_back(value_lr, L_TIMESTAMP.value());
-                    } else if (kvp.first == "level"_frag) {
+                        known_field = true;
+                    } else if (kvp.first.is_one_of("level"_frag, "lvl"_frag)) {
                         sa.emplace_back(value_lr, L_LEVEL.value());
-                    } else if (kvp.first == "msg"_frag) {
+                        known_field = true;
+                    } else if (kvp.first.is_one_of("msg"_frag, "message"_frag))
+                    {
                         sa.emplace_back(value_lr, SA_BODY.value());
+                        found_body = true;
                     } else if (kvp.second.is<logfmt::parser::quoted_value>()
                                || kvp.second
                                       .is<logfmt::parser::unquoted_value>())
@@ -2153,7 +2173,15 @@ public:
                                   .with_struct_name(FIELDS_NAME);
                         values.lvv_values.emplace_back(lvm, value_frag);
                     }
-
+                    if (known_field) {
+                        auto key_with_eq = kvp.first;
+                        key_with_eq.sf_end += 1;
+                        sa.emplace_back(to_line_range(key_with_eq),
+                                        SA_REPLACED.value());
+                    } else {
+                        sa.emplace_back(to_line_range(kvp.first),
+                                        VC_ROLE.value(role_t::VCR_OBJECT_KEY));
+                    }
                     return false;
                 },
                 [line_number, &sbr](const logfmt::parser::error& err) {
@@ -2163,6 +2191,11 @@ public:
                               err.e_msg.c_str());
                     return true;
                 });
+        }
+
+        if (!found_body) {
+            sa.emplace_back(line_range::empty_at(sbr.length()),
+                            SA_BODY.value());
         }
 
         log_format::annotate(lf, line_number, sa, values, annotate_module);

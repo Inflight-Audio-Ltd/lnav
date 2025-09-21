@@ -1,9 +1,15 @@
 
 dist_noinst_DATA = \
+    test_breakpoints.sh_530605d52ea4616e05120289b1cb2246e36009bf.err \
+    test_breakpoints.sh_530605d52ea4616e05120289b1cb2246e36009bf.out \
+    test_breakpoints.sh_b4000f210d18582a69aa472b5e8b6b4f39da075d.err \
+    test_breakpoints.sh_b4000f210d18582a69aa472b5e8b6b4f39da075d.out \
     test_cli.sh_0b3639753916f71254e8c9cce4ebb8bfd9978d3e.err \
     test_cli.sh_0b3639753916f71254e8c9cce4ebb8bfd9978d3e.out \
     test_cli.sh_10c33e465ef7681c6b5519d05d557426b26cd43d.err \
     test_cli.sh_10c33e465ef7681c6b5519d05d557426b26cd43d.out \
+    test_cli.sh_1507a515f62dfc9ad0af85decadbd7921be9b96d.err \
+    test_cli.sh_1507a515f62dfc9ad0af85decadbd7921be9b96d.out \
     test_cli.sh_17a68b798354f9a6cdfab372006caeb74038d15c.err \
     test_cli.sh_17a68b798354f9a6cdfab372006caeb74038d15c.out \
     test_cli.sh_1ec76eb2416d2c09c13eba62ff8bcf920a888b9c.err \
@@ -416,12 +422,16 @@ dist_noinst_DATA = \
     test_logfile.sh_09bd16e044302f6b121092534708594bdad11b5a.out \
     test_logfile.sh_18d9a7beeb09041993d0d6da488fc8192d111bd9.err \
     test_logfile.sh_18d9a7beeb09041993d0d6da488fc8192d111bd9.out \
+    test_logfile.sh_1fdc7973d954c6eee8aeb0dbd022d62cb16ba500.err \
+    test_logfile.sh_1fdc7973d954c6eee8aeb0dbd022d62cb16ba500.out \
     test_logfile.sh_218ecb88b4753010c4264b3ac351260b4811612f.err \
     test_logfile.sh_218ecb88b4753010c4264b3ac351260b4811612f.out \
     test_logfile.sh_290a3c49e53c2229a7400c107338fa0bb38375e2.err \
     test_logfile.sh_290a3c49e53c2229a7400c107338fa0bb38375e2.out \
     test_logfile.sh_2e72d848a51ac1eb476b973c61fe43a65d579ba5.err \
     test_logfile.sh_2e72d848a51ac1eb476b973c61fe43a65d579ba5.out \
+    test_logfile.sh_30a88ca64ee19c5c6fb2422ae142b98716a74357.err \
+    test_logfile.sh_30a88ca64ee19c5c6fb2422ae142b98716a74357.out \
     test_logfile.sh_341e491abcf8772422bafb8b0eaea6492da230f6.err \
     test_logfile.sh_341e491abcf8772422bafb8b0eaea6492da230f6.out \
     test_logfile.sh_3fc6bfd8a6160817211f3e14fde957af75b9dbe7.err \
@@ -438,16 +448,24 @@ dist_noinst_DATA = \
     test_logfile.sh_6602faf7817c494c33e32da7ee95f13aa9210d01.out \
     test_logfile.sh_6e91affb9eb4f61e9073d62117cdb29d1e8c2230.err \
     test_logfile.sh_6e91affb9eb4f61e9073d62117cdb29d1e8c2230.out \
+    test_logfile.sh_74590bc7d516f6a6b9191774ca98b3880658cf3f.err \
+    test_logfile.sh_74590bc7d516f6a6b9191774ca98b3880658cf3f.out \
     test_logfile.sh_7c2e11488bccc59458b5775db4b90de964858259.err \
     test_logfile.sh_7c2e11488bccc59458b5775db4b90de964858259.out \
     test_logfile.sh_82d65f4dac07b1623f8202444d5b9144096e8243.err \
     test_logfile.sh_82d65f4dac07b1623f8202444d5b9144096e8243.out \
     test_logfile.sh_8a5e754cd471e5fdcdaede49c9290903acd7aad6.err \
     test_logfile.sh_8a5e754cd471e5fdcdaede49c9290903acd7aad6.out \
+    test_logfile.sh_977cd36c516d568070253202a0ba81f545cb216f.err \
+    test_logfile.sh_977cd36c516d568070253202a0ba81f545cb216f.out \
     test_logfile.sh_9a35dc7e0d53309435fb97f097efe43adcfbc87f.err \
     test_logfile.sh_9a35dc7e0d53309435fb97f097efe43adcfbc87f.out \
+    test_logfile.sh_9bea66018e06d77d91a372c7644f1549411c3337.err \
+    test_logfile.sh_9bea66018e06d77d91a372c7644f1549411c3337.out \
     test_logfile.sh_a7037efd0c4bbf51940137a44e57d94e9307e83e.err \
     test_logfile.sh_a7037efd0c4bbf51940137a44e57d94e9307e83e.out \
+    test_logfile.sh_bc6cce54323b875e451dddadbab989fbfa5d1631.err \
+    test_logfile.sh_bc6cce54323b875e451dddadbab989fbfa5d1631.out \
     test_logfile.sh_bcf123ebd1c59c46a513f3fadd442bb7ab345843.err \
     test_logfile.sh_bcf123ebd1c59c46a513f3fadd442bb7ab345843.out \
     test_logfile.sh_c18e14a26d8261c9f72747118a469266121d5459.err \
@@ -466,6 +484,8 @@ dist_noinst_DATA = \
     test_logfile.sh_e840b674cd65936a72bd64b1dac1524d16fe44c3.out \
     test_logfile.sh_f171f265d8d45a2707e8b9f53e938f574c614d25.err \
     test_logfile.sh_f171f265d8d45a2707e8b9f53e938f574c614d25.out \
+    test_logfile.sh_f665bc56a0092f4e428e92ffe734653d30346365.err \
+    test_logfile.sh_f665bc56a0092f4e428e92ffe734653d30346365.out \
     test_logfile.sh_f6ea1ec9cfe1f4419be0f6845e8a8584c5b040f7.err \
     test_logfile.sh_f6ea1ec9cfe1f4419be0f6845e8a8584c5b040f7.out \
     test_logfile.sh_fa4596c95f689e39f3d61afb4a07490a6f41d545.err \
@@ -474,6 +494,8 @@ dist_noinst_DATA = \
     test_meta.sh_0ae5840c0758ec95a397493ac3c3d4fabd397a34.out \
     test_meta.sh_154047fb52e4831aabf7d36512247bad6a6a2cf7.err \
     test_meta.sh_154047fb52e4831aabf7d36512247bad6a6a2cf7.out \
+    test_meta.sh_3b98220effee179b899aa95b277dd6629fee30ca.err \
+    test_meta.sh_3b98220effee179b899aa95b277dd6629fee30ca.out \
     test_meta.sh_3c9b5940f7533c5fc3d4956a6efce50a9e7132d4.err \
     test_meta.sh_3c9b5940f7533c5fc3d4956a6efce50a9e7132d4.out \
     test_meta.sh_41f643bb4f720130625b042563e9591bee4ae588.err \
@@ -484,6 +506,8 @@ dist_noinst_DATA = \
     test_meta.sh_48e85ba0c0945a5085fb4ee255771406061a9c17.out \
     test_meta.sh_4c39b356748c67ccf8a6027a1af88da532f8252a.err \
     test_meta.sh_4c39b356748c67ccf8a6027a1af88da532f8252a.out \
+    test_meta.sh_517c1af536536c1010ac8ffc6b4ce2f433749de3.err \
+    test_meta.sh_517c1af536536c1010ac8ffc6b4ce2f433749de3.out \
     test_meta.sh_65325d1bcb58e530a8d681685fea56803f67a2eb.err \
     test_meta.sh_65325d1bcb58e530a8d681685fea56803f67a2eb.out \
     test_meta.sh_7b75763926d832bf9784ca234a060859770aabe7.err \
@@ -692,6 +716,8 @@ dist_noinst_DATA = \
     test_sql_anno.sh_0ca32cc69613d3ada5e2337471ae056820e09916.out \
     test_sql_anno.sh_0d931572f5a8d935c0b189384235ad4d3fffccd6.err \
     test_sql_anno.sh_0d931572f5a8d935c0b189384235ad4d3fffccd6.out \
+    test_sql_anno.sh_0dec58cd102e7113c9c26baeeb7697a4df667d77.err \
+    test_sql_anno.sh_0dec58cd102e7113c9c26baeeb7697a4df667d77.out \
     test_sql_anno.sh_1151e5b727f6b57070bf2c8f047f1d7e02b803a6.err \
     test_sql_anno.sh_1151e5b727f6b57070bf2c8f047f1d7e02b803a6.out \
     test_sql_anno.sh_1398146cf8b4f074ec8b9752f021cf47d011bebc.err \
@@ -724,6 +750,8 @@ dist_noinst_DATA = \
     test_sql_anno.sh_6271c6732e20a7c4341dd8cfb4b4b226d5d7ed8d.out \
     test_sql_anno.sh_661f757d26dcc3cc7aadee33b6b21ac67741d4bc.err \
     test_sql_anno.sh_661f757d26dcc3cc7aadee33b6b21ac67741d4bc.out \
+    test_sql_anno.sh_6f865585ae4c85cbfdfbceec3156224fa7002adb.err \
+    test_sql_anno.sh_6f865585ae4c85cbfdfbceec3156224fa7002adb.out \
     test_sql_anno.sh_73814eca259e469b57bf7469787b91e8e8569b17.err \
     test_sql_anno.sh_73814eca259e469b57bf7469787b91e8e8569b17.out \
     test_sql_anno.sh_738d1913dc9cfcfa710b40ae54c25f5bbce77dac.err \
@@ -984,6 +1012,8 @@ dist_noinst_DATA = \
     test_sql_regexp.sh_d61af17ff19d640ddfc879460910991825eedd05.out \
     test_sql_regexp.sh_ed6e9f13f178def009ee58c2aeea8c3c70fdb580.err \
     test_sql_regexp.sh_ed6e9f13f178def009ee58c2aeea8c3c70fdb580.out \
+    test_sql_search_table.sh_16c08c3b6f276808c2e4743dca7aa82af245ebc0.err \
+    test_sql_search_table.sh_16c08c3b6f276808c2e4743dca7aa82af245ebc0.out \
     test_sql_search_table.sh_1a0d872ebc492fcecb2e79a0993170d5fc771a5b.err \
     test_sql_search_table.sh_1a0d872ebc492fcecb2e79a0993170d5fc771a5b.out \
     test_sql_search_table.sh_3f5f74863d065418bca5a000e6ad3d9344635164.err \
@@ -1194,8 +1224,6 @@ dist_noinst_DATA = \
     test_sql_time_func.sh_b3c00f049fdeb551a9165c281630e36359832d1f.out \
     test_sql_time_func.sh_b5f9ec3ea8b4551fd40017398d74c524fb54ebc9.err \
     test_sql_time_func.sh_b5f9ec3ea8b4551fd40017398d74c524fb54ebc9.out \
-    test_sql_time_func.sh_c1d7dc8a4bd3b8cb86a2f893f58a56f0f6ea1bc3.err \
-    test_sql_time_func.sh_c1d7dc8a4bd3b8cb86a2f893f58a56f0f6ea1bc3.out \
     test_sql_time_func.sh_c5a5fc2edb54d10f1475afa7fed0b62bc05e1dc6.err \
     test_sql_time_func.sh_c5a5fc2edb54d10f1475afa7fed0b62bc05e1dc6.out \
     test_sql_time_func.sh_c7fc60392a2e52b163da1e1dde6978c16f415a9e.err \
@@ -1292,6 +1320,8 @@ dist_noinst_DATA = \
     test_sql_yaml_func.sh_dc189d02e8979b7ed245d5d750f68b9965984699.out \
     test_sql.sh_02def66745b063518473df862987747909f56ccc.err \
     test_sql.sh_02def66745b063518473df862987747909f56ccc.out \
+    test_sql.sh_04f4c5b2f66aabad81254f5b6f69769bd012253a.err \
+    test_sql.sh_04f4c5b2f66aabad81254f5b6f69769bd012253a.out \
     test_sql.sh_09416e332d9b2f76743836b72e71b6e4492e594e.err \
     test_sql.sh_09416e332d9b2f76743836b72e71b6e4492e594e.out \
     test_sql.sh_0a5d13b62da4cb66a59a51b0240b5fe0b6036b7e.err \
@@ -1356,12 +1386,18 @@ dist_noinst_DATA = \
     test_sql.sh_5801770f3e0ecc1d62c7a97116d6da1981bbc7bd.out \
     test_sql.sh_59a1d3c9cdc302c3f9ddfe4d8cf05fb40ffd3b56.err \
     test_sql.sh_59a1d3c9cdc302c3f9ddfe4d8cf05fb40ffd3b56.out \
+    test_sql.sh_5c383bb653cb81ae3b841cf7abf6a09043d2582d.err \
+    test_sql.sh_5c383bb653cb81ae3b841cf7abf6a09043d2582d.out \
     test_sql.sh_5fe26fe4fc22f23f8dbe3a6aab394602886f2971.err \
     test_sql.sh_5fe26fe4fc22f23f8dbe3a6aab394602886f2971.out \
     test_sql.sh_61471583c5e2f8ede3a8adefce682c27bf3924c8.err \
     test_sql.sh_61471583c5e2f8ede3a8adefce682c27bf3924c8.out \
     test_sql.sh_62eb85c9569e71a630d72065238559528a16114c.err \
     test_sql.sh_62eb85c9569e71a630d72065238559528a16114c.out \
+    test_sql.sh_665656359e9ffd954e1296cdc847bc7e66f7322c.err \
+    test_sql.sh_665656359e9ffd954e1296cdc847bc7e66f7322c.out \
+    test_sql.sh_6ac9b6900c36737adb00d62b524c0b85bd880922.err \
+    test_sql.sh_6ac9b6900c36737adb00d62b524c0b85bd880922.out \
     test_sql.sh_6ad9d0adf85c36363f6b24f49950dcdc13dd34ab.err \
     test_sql.sh_6ad9d0adf85c36363f6b24f49950dcdc13dd34ab.out \
     test_sql.sh_6edb0c8d5323d1b962d90dd6ecdd7eee9008d7b5.err \
@@ -1398,10 +1434,14 @@ dist_noinst_DATA = \
     test_sql.sh_9aaaa810f883f5dcf8a4d5cda4051fdf4640a65c.out \
     test_sql.sh_9be1bc2ebc2c9f54af02801fb8d0241b90be58d1.err \
     test_sql.sh_9be1bc2ebc2c9f54af02801fb8d0241b90be58d1.out \
+    test_sql.sh_9c9e94b6b63b2451f9f10fa982cfccee5d0c4b0d.err \
+    test_sql.sh_9c9e94b6b63b2451f9f10fa982cfccee5d0c4b0d.out \
     test_sql.sh_9ceccab07fbf7130bffe3c201c710719e4a3e9af.err \
     test_sql.sh_9ceccab07fbf7130bffe3c201c710719e4a3e9af.out \
     test_sql.sh_9e1d05b821822ee40e13fadb24ec558f4bfcff10.err \
     test_sql.sh_9e1d05b821822ee40e13fadb24ec558f4bfcff10.out \
+    test_sql.sh_a3a5327348fc5f166fdc0c11d27f7039fcca238e.err \
+    test_sql.sh_a3a5327348fc5f166fdc0c11d27f7039fcca238e.out \
     test_sql.sh_a6b68b9f0044d18e7fa8f9287ddc9110701edc33.err \
     test_sql.sh_a6b68b9f0044d18e7fa8f9287ddc9110701edc33.out \
     test_sql.sh_a7955e89791db9a252d8323436fabc51e2960731.err \
@@ -1552,6 +1592,8 @@ dist_noinst_DATA = \
     test_text_file.sh_e088ea61a5382458cc48a2607e2639e52b0be1da.out \
     test_text_file.sh_e556fa91b91579df20d38540a5db9cedbaf68a62.err \
     test_text_file.sh_e556fa91b91579df20d38540a5db9cedbaf68a62.out \
+    test_text_file.sh_f3e73f3195eb24ece0e43cc675d186141d22e365.err \
+    test_text_file.sh_f3e73f3195eb24ece0e43cc675d186141d22e365.out \
     test_text_file.sh_f586ef080a86dfe1f981b345bcf8d7a279b2b247.err \
     test_text_file.sh_f586ef080a86dfe1f981b345bcf8d7a279b2b247.out \
     test_text_file.sh_f7522b0a99550a3ff91aae6582eb861547c535e1.err \

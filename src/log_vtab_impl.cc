@@ -38,6 +38,7 @@
 #include "hasher.hh"
 #include "lnav_util.hh"
 #include "logfile_sub_source.hh"
+#include "logline_window.hh"
 #include "scn/ranges.h"
 #include "sql_util.hh"
 #include "vtab_module.hh"
@@ -64,7 +65,8 @@ const std::unordered_set<string_fragment, frag_hasher>
         "log_user_opid"_frag,   "log_format"_frag,      "log_format_regex"_frag,
         "log_time_msecs"_frag,  "log_path"_frag,        "log_unique_path"_frag,
         "log_text"_frag,        "log_body"_frag,        "log_raw_text"_frag,
-        "log_line_hash"_frag,   "log_line_link"_frag,
+        "log_line_hash"_frag,   "log_line_link"_frag,   "log_src_file"_frag,
+        "log_src_line"_frag,
 };
 
 static const char* const LOG_COLUMNS = R"(  (
@@ -95,7 +97,9 @@ static const char* const LOG_FOOTER_COLUMNS = R"(
   log_body         TEXT HIDDEN,                       -- The body of the log message
   log_raw_text     TEXT HIDDEN,                       -- The raw text from the log file
   log_line_hash    TEXT HIDDEN,                       -- A hash of the first line of the log message
-  log_line_link    TEXT HIDDEN                        -- The permalink for the log message
+  log_line_link    TEXT HIDDEN,                       -- The permalink for the log message
+  log_src_file     TEXT HIDDEN,                       -- The source file the log message came from
+  log_src_line     TEXT HIDDEN                        -- The source line the log message came from
 )";
 
 enum class log_footer_columns : uint32_t {
@@ -119,6 +123,8 @@ enum class log_footer_columns : uint32_t {
     raw_text,
     line_hash,
     line_link,
+    src_file,
+    src_line,
 };
 
 const std::string&
@@ -238,17 +244,18 @@ log_vtab_impl::get_foreign_keys(
     keys_inout.emplace("log_time_msecs");
     keys_inout.emplace("log_top_line()");
     keys_inout.emplace("log_msg_line()");
+    keys_inout.emplace("log_src_line");
 }
 
 void
 log_vtab_impl::extract(logfile* lf,
                        uint64_t line_number,
+                       string_attrs_t& sa,
                        logline_value_vector& values)
 {
-    auto format = lf->get_format_ptr();
+    const auto* format = lf->get_format_ptr();
 
-    this->vi_attrs.clear();
-    format->annotate(lf, line_number, this->vi_attrs, values, false);
+    format->annotate(lf, line_number, sa, values, false);
 }
 
 bool
@@ -353,6 +360,7 @@ struct vtab_cursor {
 
     void invalidate()
     {
+        this->attrs.clear();
         this->line_values.clear();
         this->log_msg_line = -1_vl;
     }
@@ -360,6 +368,7 @@ struct vtab_cursor {
     sqlite3_vtab_cursor base;
     struct log_cursor log_cursor;
     vis_line_t log_msg_line{-1_vl};
+    string_attrs_t attrs;
     logline_value_vector line_values;
 };
 
@@ -517,7 +526,7 @@ populate_indexed_columns(vtab_cursor* vc, log_vtab* vt)
 
             vc->cache_msg(lf, ll);
             require(vc->line_values.lvv_sbr.get_data() != nullptr);
-            vt->vi->extract(lf, line_number, vc->line_values);
+            vt->vi->extract(lf, line_number, vc->attrs, vc->line_values);
         }
 
         auto sub_col = logline_value_meta::table_column{
@@ -739,10 +748,10 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
         }
 
         case VT_COL_LEVEL: {
-            const char* level_name = ll->get_level_name();
+            const auto& level_name = ll->get_level_name();
 
             sqlite3_result_text(
-                ctx, level_name, strlen(level_name), SQLITE_STATIC);
+                ctx, level_name.data(), level_name.length(), SQLITE_STATIC);
             break;
         }
 
@@ -792,14 +801,16 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                                 vc->cache_msg(lf, ll);
                                 require(vc->line_values.lvv_sbr.get_data()
                                         != nullptr);
-                                vt->vi->extract(
-                                    lf, line_number, vc->line_values);
+                                vt->vi->extract(lf,
+                                                line_number,
+                                                vc->attrs,
+                                                vc->line_values);
                             }
 
                             struct line_range time_range;
 
-                            time_range = find_string_attr_range(
-                                vt->vi->vi_attrs, &L_TIMESTAMP);
+                            time_range = find_string_attr_range(vc->attrs,
+                                                                &L_TIMESTAMP);
 
                             const auto* time_src
                                 = vc->line_values.lvv_sbr.get_data()
@@ -953,7 +964,8 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                             vc->cache_msg(lf, ll);
                             require(vc->line_values.lvv_sbr.get_data()
                                     != nullptr);
-                            vt->vi->extract(lf, line_number, vc->line_values);
+                            vt->vi->extract(
+                                lf, line_number, vc->attrs, vc->line_values);
                         }
 
                         if (vc->line_values.lvv_opid_value) {
@@ -969,7 +981,8 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                             vc->cache_msg(lf, ll);
                             require(vc->line_values.lvv_sbr.get_data()
                                     != nullptr);
-                            vt->vi->extract(lf, line_number, vc->line_values);
+                            vt->vi->extract(
+                                lf, line_number, vc->attrs, vc->line_values);
                         }
 
                         if (vc->line_values.lvv_opid_value
@@ -1040,13 +1053,12 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                             vc->cache_msg(lf, ll);
                             require(vc->line_values.lvv_sbr.get_data()
                                     != nullptr);
-                            vt->vi->extract(lf, line_number, vc->line_values);
+                            vt->vi->extract(
+                                lf, line_number, vc->attrs, vc->line_values);
                         }
 
-                        struct line_range body_range;
-
-                        body_range = find_string_attr_range(vt->vi->vi_attrs,
-                                                            &SA_BODY);
+                        auto body_range
+                            = find_string_attr_range(vc->attrs, &SA_BODY);
                         if (!body_range.is_valid()) {
                             sqlite3_result_null(ctx);
                         } else {
@@ -1082,7 +1094,7 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                     case log_footer_columns::line_hash: {
                         auto lw
                             = vt->lss->window_at(vc->log_cursor.lc_curr_line);
-                        for (const auto& li : lw) {
+                        for (const auto& li : *lw) {
                             auto hash_res = li.get_line_hash();
                             if (hash_res.isErr()) {
                                 auto msg = fmt::format(
@@ -1108,12 +1120,61 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                         }
                         break;
                     }
+                    case log_footer_columns::src_file: {
+                        if (vc->line_values.lvv_values.empty()) {
+                            vc->cache_msg(lf, ll);
+                            require(vc->line_values.lvv_sbr.get_data()
+                                    != nullptr);
+                            vt->vi->extract(
+                                lf, line_number, vc->attrs, vc->line_values);
+                        }
+
+                        auto src_range
+                            = find_string_attr_range(vc->attrs, &SA_SRC_FILE);
+                        if (!src_range.is_valid()) {
+                            sqlite3_result_null(ctx);
+                        } else {
+                            const char* msg_start
+                                = vc->line_values.lvv_sbr.get_data();
+
+                            sqlite3_result_text(ctx,
+                                                &msg_start[src_range.lr_start],
+                                                src_range.length(),
+                                                SQLITE_TRANSIENT);
+                        }
+                        break;
+                    }
+                    case log_footer_columns::src_line: {
+                        if (vc->line_values.lvv_values.empty()) {
+                            vc->cache_msg(lf, ll);
+                            require(vc->line_values.lvv_sbr.get_data()
+                                    != nullptr);
+                            vt->vi->extract(
+                                lf, line_number, vc->attrs, vc->line_values);
+                        }
+
+                        auto src_range
+                            = find_string_attr_range(vc->attrs, &SA_SRC_LINE);
+                        if (!src_range.is_valid()) {
+                            sqlite3_result_null(ctx);
+                        } else {
+                            const char* msg_start
+                                = vc->line_values.lvv_sbr.get_data();
+
+                            sqlite3_result_text(ctx,
+                                                &msg_start[src_range.lr_start],
+                                                src_range.length(),
+                                                SQLITE_TRANSIENT);
+                        }
+                        break;
+                    }
                 }
             } else {
                 if (vc->line_values.lvv_values.empty()) {
                     vc->cache_msg(lf, ll);
                     require(vc->line_values.lvv_sbr.get_data() != nullptr);
-                    vt->vi->extract(lf, line_number, vc->line_values);
+                    vt->vi->extract(
+                        lf, line_number, vc->attrs, vc->line_values);
                 }
 
                 auto sub_col = logline_value_meta::table_column{
@@ -1749,6 +1810,8 @@ vt_filter(sqlite3_vtab_cursor* p_vtc,
                         case log_footer_columns::body:
                         case log_footer_columns::raw_text:
                         case log_footer_columns::line_hash:
+                        case log_footer_columns::src_file:
+                        case log_footer_columns::src_line:
                             break;
                         case log_footer_columns::line_link: {
                             if (sqlite3_value_type(argv[lpc]) != SQLITE3_TEXT) {
@@ -1995,10 +2058,9 @@ vt_filter(sqlite3_vtab_cursor* p_vtc,
                 = vt->lss->row_for_time(log_time_range->vtr_end.value());
             if (vl_max_opt) {
                 p_cur->log_cursor.lc_end_line = vl_max_opt.value();
-                for (const auto& msg_info :
-                     vt->lss->window_at(vl_max_opt.value(),
-                                        vis_line_t(vt->lss->text_line_count())))
-                {
+                auto win = vt->lss->window_at(
+                    vl_max_opt.value(), vis_line_t(vt->lss->text_line_count()));
+                for (const auto& msg_info : *win) {
                     if (log_time_range->vtr_end.value()
                         < msg_info.get_logline().get_timeval())
                     {
@@ -2204,6 +2266,8 @@ vt_best_index(sqlite3_vtab* tab, sqlite3_index_info* p_info)
                         case log_footer_columns::body:
                         case log_footer_columns::raw_text:
                         case log_footer_columns::line_hash:
+                        case log_footer_columns::src_file:
+                        case log_footer_columns::src_line:
                             break;
                         case log_footer_columns::line_link: {
                             argvInUse += 1;
@@ -2295,7 +2359,8 @@ vt_update(sqlite3_vtab* tab,
         int val = sqlite3_value_int(
             argv[2 + vt->footer_index(log_footer_columns::mark)]);
         vis_line_t vrowid(rowid);
-        const auto msg_info = *vt->lss->window_at(vrowid).begin();
+        auto win = vt->lss->window_at(vrowid);
+        const auto msg_info = *win->begin();
         const auto* part_name = sqlite3_value_text(
             argv[2 + vt->footer_index(log_footer_columns::partition)]);
         const auto* log_comment = sqlite3_value_text(

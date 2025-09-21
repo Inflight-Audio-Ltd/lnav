@@ -345,7 +345,30 @@ relative_time::from_str(string_fragment str)
                     gettimeofday(&tv, nullptr);
                     localtime_r(&tv.tv_sec, &tm.et_tm);
                     tm.et_nsec = tv.tv_usec * 1000;
+                    if (base_token == RTT_BEFORE) {
+                        retval.negate();
+                    }
+                    switch (token) {
+                        case RTT_YESTERDAY:
+                        case RTT_TODAY:
+                            if (!retval.rt_field[RTF_HOURS].is_set) {
+                                retval.rt_field[RTF_HOURS] = 0;
+                            }
+                            if (!retval.rt_field[RTF_MINUTES].is_set) {
+                                retval.rt_field[RTF_MINUTES] = 0;
+                            }
+                            if (!retval.rt_field[RTF_SECONDS].is_set) {
+                                retval.rt_field[RTF_SECONDS] = 0;
+                            }
+                            if (!retval.rt_field[RTF_MICROSECONDS].is_set) {
+                                retval.rt_field[RTF_MICROSECONDS] = 0;
+                            }
+                            break;
+                        default:
+                            break;
+                    }
                     tm = retval.adjust(tm);
+                    base_token = RTT_INVALID;
 
                     retval.rt_field[RTF_YEARS] = tm.et_tm.tm_year;
                     retval.rt_field[RTF_MONTHS] = tm.et_tm.tm_mon;
@@ -360,11 +383,6 @@ relative_time::from_str(string_fragment str)
                             break;
                         case RTT_YESTERDAY:
                             retval.rt_field[RTF_DAYS].value -= 1;
-                        case RTT_TODAY:
-                            retval.rt_field[RTF_HOURS] = 0;
-                            retval.rt_field[RTF_MINUTES] = 0;
-                            retval.rt_field[RTF_SECONDS] = 0;
-                            retval.rt_field[RTF_MICROSECONDS] = 0;
                             break;
                         default:
                             break;
@@ -1131,6 +1149,7 @@ relative_time::to_microseconds() const
             etm.et_tm.tm_mday = 1;
         }
         etm.et_tm.tm_yday = -1;
+        etm.et_tm.tm_hour = this->rt_field[RTF_HOURS].value;
         etm.et_tm.tm_min = this->rt_field[RTF_MINUTES].value;
         etm.et_tm.tm_sec = this->rt_field[RTF_SECONDS].value;
 

@@ -449,45 +449,47 @@ static const struct json_path_container pattern_handlers = {
         .for_field(&external_log_format::pattern::p_module_format),
 };
 
-static const json_path_handler_base::enum_value_t SUBSECOND_UNIT_ENUM[] = {
-    {"milli", log_format::subsecond_unit::milli},
-    {"micro", log_format::subsecond_unit::micro},
-    {"nano", log_format::subsecond_unit::nano},
+static constexpr json_path_handler_base::enum_value_t SUBSECOND_UNIT_ENUM[] = {
+    {"milli"_frag, log_format::subsecond_unit::milli},
+    {"micro"_frag, log_format::subsecond_unit::micro},
+    {"nano"_frag, log_format::subsecond_unit::nano},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
 
-static const json_path_handler_base::enum_value_t ALIGN_ENUM[] = {
-    {"left", external_log_format::json_format_element::align_t::LEFT},
-    {"right", external_log_format::json_format_element::align_t::RIGHT},
+static constexpr json_path_handler_base::enum_value_t ALIGN_ENUM[] = {
+    {"left"_frag, external_log_format::json_format_element::align_t::LEFT},
+    {"right"_frag, external_log_format::json_format_element::align_t::RIGHT},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
 
-static const json_path_handler_base::enum_value_t OVERFLOW_ENUM[] = {
-    {"abbrev", external_log_format::json_format_element::overflow_t::ABBREV},
-    {"truncate",
+static constexpr json_path_handler_base::enum_value_t OVERFLOW_ENUM[] = {
+    {"abbrev"_frag,
+     external_log_format::json_format_element::overflow_t::ABBREV},
+    {"truncate"_frag,
      external_log_format::json_format_element::overflow_t::TRUNCATE},
-    {"dot-dot", external_log_format::json_format_element::overflow_t::DOTDOT},
-    {"last-word",
+    {"dot-dot"_frag,
+     external_log_format::json_format_element::overflow_t::DOTDOT},
+    {"last-word"_frag,
      external_log_format::json_format_element::overflow_t::LASTWORD},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
 
-static const json_path_handler_base::enum_value_t TRANSFORM_ENUM[] = {
-    {"none", external_log_format::json_format_element::transform_t::NONE},
-    {"uppercase",
+static constexpr json_path_handler_base::enum_value_t TRANSFORM_ENUM[] = {
+    {"none"_frag, external_log_format::json_format_element::transform_t::NONE},
+    {"uppercase"_frag,
      external_log_format::json_format_element::transform_t::UPPERCASE},
-    {"lowercase",
+    {"lowercase"_frag,
      external_log_format::json_format_element::transform_t::LOWERCASE},
-    {"capitalize",
+    {"capitalize"_frag,
      external_log_format::json_format_element::transform_t::CAPITALIZE},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
 
-static const struct json_path_container line_format_handlers = {
+static const json_path_container line_format_handlers = {
     yajlpp::property_handler("field")
         .with_synopsis("<field-name>")
         .with_description(
@@ -555,23 +557,23 @@ static const struct json_path_container line_format_handlers = {
         .for_field(&external_log_format::json_format_element::jfe_suffix),
 };
 
-static const json_path_handler_base::enum_value_t KIND_ENUM[] = {
-    {"string", value_kind_t::VALUE_TEXT},
-    {"integer", value_kind_t::VALUE_INTEGER},
-    {"float", value_kind_t::VALUE_FLOAT},
-    {"boolean", value_kind_t::VALUE_BOOLEAN},
-    {"json", value_kind_t::VALUE_JSON},
-    {"struct", value_kind_t::VALUE_STRUCT},
-    {"quoted", value_kind_t::VALUE_QUOTED},
-    {"xml", value_kind_t::VALUE_XML},
+static constexpr json_path_handler_base::enum_value_t KIND_ENUM[] = {
+    {"string"_frag, value_kind_t::VALUE_TEXT},
+    {"integer"_frag, value_kind_t::VALUE_INTEGER},
+    {"float"_frag, value_kind_t::VALUE_FLOAT},
+    {"boolean"_frag, value_kind_t::VALUE_BOOLEAN},
+    {"json"_frag, value_kind_t::VALUE_JSON},
+    {"struct"_frag, value_kind_t::VALUE_STRUCT},
+    {"quoted"_frag, value_kind_t::VALUE_QUOTED},
+    {"xml"_frag, value_kind_t::VALUE_XML},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
 
-static const json_path_handler_base::enum_value_t SCALE_OP_ENUM[] = {
-    {"identity", scale_op_t::SO_IDENTITY},
-    {"multiply", scale_op_t::SO_MULTIPLY},
-    {"divide", scale_op_t::SO_DIVIDE},
+static constexpr json_path_handler_base::enum_value_t SCALE_OP_ENUM[] = {
+    {"identity"_frag, scale_op_t::SO_IDENTITY},
+    {"multiply"_frag, scale_op_t::SO_MULTIPLY},
+    {"divide"_frag, scale_op_t::SO_DIVIDE},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
@@ -723,10 +725,10 @@ static const struct json_path_container sample_handlers = {
         .for_field(&external_log_format::sample_t::s_level),
 };
 
-static const json_path_handler_base::enum_value_t TYPE_ENUM[] = {
-    {"text", external_log_format::elf_type_t::ELF_TYPE_TEXT},
-    {"json", external_log_format::elf_type_t::ELF_TYPE_JSON},
-    {"csv", external_log_format::elf_type_t::ELF_TYPE_CSV},
+static constexpr json_path_handler_base::enum_value_t TYPE_ENUM[] = {
+    {"text"_frag, external_log_format::elf_type_t::ELF_TYPE_TEXT},
+    {"json"_frag, external_log_format::elf_type_t::ELF_TYPE_JSON},
+    {"csv"_frag, external_log_format::elf_type_t::ELF_TYPE_CSV},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
@@ -1036,6 +1038,18 @@ const struct json_path_container format_handlers = {
         .with_description(
             "The name of the body field in the log message pattern")
         .for_field(&external_log_format::elf_body_field),
+    json_path_handler("thread-id-field")
+        .with_description(
+            "The name of the thread ID field in the log message pattern")
+        .for_field(&external_log_format::elf_thread_id_field),
+    json_path_handler("src-file-field")
+        .with_description(
+            "The name of the source file field in the log message pattern")
+        .for_field(&external_log_format::elf_src_file_field),
+    json_path_handler("src-line-field")
+        .with_description(
+            "The name of the source line field in the log message pattern")
+        .for_field(&external_log_format::elf_src_line_field),
     json_path_handler("url",
                       lnav::pcre2pp::code::from_const("^url#?").to_shared())
         .add_cb(read_format_field)
@@ -1163,8 +1177,9 @@ const struct json_path_container root_format_handler = json_path_container{
 static void
 write_sample_file()
 {
+    const auto dstdir = lnav::paths::dotlnav();
     for (const auto& bsf : lnav_format_json) {
-        auto sample_path = lnav::paths::dotlnav()
+        auto sample_path = dstdir
             / fmt::format(FMT_STRING("formats/default/{}.sample"),
                           bsf.get_name());
 
@@ -1199,7 +1214,7 @@ write_sample_file()
     }
 
     for (const auto& bsf : lnav_sh_scripts) {
-        auto sh_path = lnav::paths::dotlnav()
+        auto sh_path = dstdir
             / fmt::format(FMT_STRING("formats/default/{}"), bsf.get_name());
         auto stat_res = lnav::filesystem::stat_file(sh_path);
         if (stat_res.isOk()) {
@@ -1235,7 +1250,7 @@ write_sample_file()
         extract_metadata(sf, meta);
         auto path
             = fmt::format(FMT_STRING("formats/default/{}.lnav"), meta.sm_name);
-        auto script_path = lnav::paths::dotlnav() / path;
+        auto script_path = dstdir / path;
         auto stat_res = lnav::filesystem::stat_file(script_path);
         if (stat_res.isOk()) {
             auto st = stat_res.unwrap();

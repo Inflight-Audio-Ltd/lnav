@@ -27,6 +27,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <memory>
 #include <optional>
 
 #include "spectro_impls.hh"
@@ -34,6 +35,7 @@
 #include "base/itertools.hh"
 #include "lnav.hh"
 #include "logfile_sub_source.hh"
+#include "logline_window.hh"
 #include "textview_curses.hh"
 
 using namespace lnav::roles::literals;
@@ -202,7 +204,8 @@ log_spectro_value_source::spectro_row(spectrogram_request& sr,
     auto end_line = lss.find_from_time(timeval{to_time_t(sr.sr_end_time), 0})
                         .value_or(vis_line_t(lss.text_line_count()));
 
-    for (const auto& msg_info : lss.window_at(begin_line, end_line)) {
+    auto win = lss.window_at(begin_line, end_line);
+    for (const auto& msg_info : *win) {
         const auto& ll = msg_info.get_logline();
         if (ll.get_time<std::chrono::microseconds>() >= sr.sr_end_time) {
             break;
@@ -243,7 +246,8 @@ log_spectro_value_source::spectro_row(spectrogram_request& sr,
         retval->fss_delegate = &lss;
         retval->fss_time_delegate = &lss;
         retval->fss_overlay_delegate = nullptr;
-        for (const auto& msg_info : lss.window_at(begin_line, end_line)) {
+        auto win = lss.window_at(begin_line, end_line);
+        for (const auto& msg_info : *win) {
             const auto& ll = msg_info.get_logline();
             if (ll.get_time<std::chrono::microseconds>() >= sr.sr_end_time) {
                 break;
@@ -299,11 +303,11 @@ log_spectro_value_source::spectro_mark(textview_curses& tc,
     logline_value_vector values;
     string_attrs_t sa;
 
-    for (vis_line_t curr_line = begin_line; curr_line < end_line; ++curr_line) {
-        content_line_t cl = lss.at(curr_line);
-        std::shared_ptr<logfile> lf = lss.find(cl);
+    for (auto curr_line = begin_line; curr_line < end_line; ++curr_line) {
+        auto cl = lss.at(curr_line);
+        const auto lf = lss.find(cl);
         auto ll = lf->begin() + cl;
-        auto format = lf->get_format();
+        const auto* format = lf->get_format_ptr();
 
         if (!ll->is_message()) {
             continue;

@@ -44,7 +44,7 @@ static const lnav::pcre2pp::code&
 ansi_regex()
 {
     static const auto retval = lnav::pcre2pp::code::from_const(
-        R"(\x1b\[([\d=;\?]*)([a-zA-Z])|\x1b\](\d+);(.*?)(?:\x07|\x1b\\)|(?:\X\x08\X)+|(\x16+))");
+        R"(\x00|\x1b\[([\d=;:\?]*)([a-zA-Z])|\x1b\](\d+);(.*?)(?:\x07|\x1b\\)|(?:\X\x08\X)+|(\x16+))");
 
     return retval;
 }
@@ -71,6 +71,14 @@ erase_ansi_escapes(string_fragment input)
         }
 
         auto sf = md[0].value();
+
+        if (sf == "\x00"_frag) {
+            *input.writable_data(0) = ' ';
+            move_start = sf.sf_end;
+            fill_index += 1;
+            continue;
+        }
+
         auto bs_index_res = sf.codepoint_to_byte_index(1);
 
         if (move_start) {
@@ -122,6 +130,8 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
 {
     thread_local auto md = lnav::pcre2pp::match_data::unitialized();
     static constexpr auto semi_pred = string_fragment::tag1{';'};
+    static constexpr auto colon_pred
+        = [](char ch) { return ch == ';' || ch == ':'; };
 
     const auto& regex = ansi_regex();
     std::optional<std::string> href;
@@ -133,7 +143,6 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
     int erased = 0;
     size_t tmp_sa_open = 0;
 
-    std::replace(str.begin(), str.end(), '\0', ' ');
     auto matcher = regex.capture_from(str).into(md);
     while (true) {
         auto match_res = matcher.matches(PCRE2_NO_UTF_CHECK);
@@ -155,6 +164,13 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
             cp_dst += cp_len;
         } else {
             cp_dst = sf.sf_begin;
+        }
+
+        if (sf == "\x00"_frag) {
+            str[cp_dst] = ' ';
+            cp_start = sf.sf_end;
+            cp_dst = sf.sf_end;
+            continue;
         }
 
         if (sf.length() >= 3 && bs_index_res.isOk()
@@ -264,7 +280,7 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
             continue;
         }
 
-        struct line_range lr;
+        line_range lr;
         text_attrs attrs;
         bool has_attrs = false;
         std::optional<role_t> role;
@@ -327,8 +343,8 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
                         }
                         if (ansi_code == 38 || ansi_code == 48) {
                             auto color_code_pair
-                                = seq.split_when(semi_pred).second.split_pair(
-                                    semi_pred);
+                                = seq.split_when(colon_pred)
+                                      .second.split_pair(colon_pred);
                             if (!color_code_pair) {
                                 break;
                             }
@@ -338,19 +354,24 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
                                 break;
                             }
                             if (color_type->value() == 2) {
-                                auto scan_res
-                                    = scn::scan<uint8_t, uint8_t, uint8_t>(
+                                auto scan_res = scn::
+                                    scan<uint8_t, char, uint8_t, char, uint8_t>(
                                         color_code_pair->second
                                             .to_string_view(),
-                                        "{};{};{}");
+                                        "{}{}{}{}{}");
                                 if (scan_res) {
-                                    auto [r, g, b] = scan_res->values();
-                                    attrs.ta_fg_color = rgb_color{r, g, b};
+                                    auto [r, sep1, g, sep2, b]
+                                        = scan_res->values();
+                                    if ((sep1 == ';' && sep2 == ';')
+                                        || (sep1 == ':' && sep2 == ':'))
+                                    {
+                                        attrs.ta_fg_color = rgb_color{r, g, b};
+                                    }
                                 }
                             } else if (color_type->value() == 5) {
                                 auto color_index_pair
                                     = color_code_pair->second.split_when(
-                                        semi_pred);
+                                        colon_pred);
                                 auto color_index = scn::scan_value<short>(
                                     color_index_pair.first.to_string_view());
                                 if (!color_index.has_value()

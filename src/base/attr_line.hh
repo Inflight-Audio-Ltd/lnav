@@ -153,7 +153,6 @@ rfind_string_attr_if(const string_attrs_t& sa, ssize_t near, T predicate)
     auto nearest = sa.end();
     ssize_t last_diff = INT_MAX;
 
-
     for (auto iter = sa.begin(); iter != sa.end(); ++iter) {
         const auto& lr = iter->sa_range;
 
@@ -298,7 +297,11 @@ public:
     {
         size_t start_len = this->al_string.length();
 
-        this->al_string.append(str);
+        if constexpr (std::is_same_v<S, string_fragment>) {
+            this->al_string += str;
+        } else {
+            this->al_string.append(str);
+        }
 
         line_range lr{(int) start_len, (int) this->al_string.length()};
 
@@ -312,7 +315,13 @@ public:
     {
         size_t start_len = this->al_string.length();
 
-        this->al_string.append(std::move(value.first));
+        if constexpr (std::is_same_v<S, string_fragment>) {
+            this->al_string += value.first;
+        } else if constexpr (std::is_same_v<S, attr_line_t>) {
+            this->append(value.first);
+        } else {
+            this->al_string.append(std::move(value.first));
+        }
 
         line_range lr{(int) start_len, (int) this->al_string.length()};
 
@@ -325,7 +334,7 @@ public:
     {
         size_t start_len = this->al_string.length();
 
-        this->al_string.append(value.first.data(), value.first.length());
+        this->al_string += value.first;
 
         line_range lr{(int) start_len, (int) this->al_string.length()};
 

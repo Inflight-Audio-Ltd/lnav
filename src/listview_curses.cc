@@ -31,6 +31,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <optional>
 
 #include "listview_curses.hh"
 
@@ -38,6 +39,8 @@
 #include <time.h>
 
 #include "base/func_util.hh"
+#include "base/itertools.enumerate.hh"
+#include "base/itertools.hh"
 #include "base/keycodes.hh"
 #include "base/lnav_log.hh"
 #include "config.h"
@@ -128,7 +131,7 @@ listview_curses::get_dimensions(vis_line_t& height_out,
 {
     unsigned int height;
 
-    if (this->lv_window == nullptr) {
+    if (this->vc_window == nullptr) {
         height_out = std::max(this->lv_height, 1_vl);
         if (this->lv_source) {
             width_out = this->lv_source->listview_width(*this);
@@ -138,7 +141,7 @@ listview_curses::get_dimensions(vis_line_t& height_out,
     } else {
         unsigned int width_tmp;
 
-        ncplane_dim_yx(this->lv_window, &height, &width_tmp);
+        ncplane_dim_yx(this->vc_window, &height, &width_tmp);
         width_out = width_tmp;
         if (this->lv_height < 0) {
             height_out
@@ -294,8 +297,13 @@ listview_curses::handle_key(const ncinput& ch)
             {
                 this->set_selection(0_vl);
             } else {
-                auto shift_amount
-                    = -(this->rows_available(this->lv_top, RD_UP) - 1_vl);
+                auto rows_avail = this->rows_available(this->lv_top, RD_UP);
+                if (rows_avail <= 1_vl) {
+                    // may happen in case of jumping over very long lines
+                    // and we need to garantee at least some movement
+                    rows_avail = 2_vl;
+                }
+                auto shift_amount = -(rows_avail - 1_vl);
                 this->shift_top(shift_amount);
             }
             break;
@@ -414,16 +422,20 @@ listview_curses::handle_key(const ncinput& ch)
 }
 
 vis_line_t
-listview_curses::get_overlay_top(vis_line_t row, size_t count, size_t total)
+listview_curses::get_overlay_top(
+    vis_line_t row,
+    size_t count,
+    const std::vector<attr_line_t>& overlay_content)
 {
-    if (row == this->get_selection()) {
+    const auto total = overlay_content.size();
+    auto max_top = vis_line_t(total - count);
+    if (row == this->get_selection() && this->lv_overlay_focused) {
         if (this->lv_focused_overlay_selection >= (ssize_t) total) {
             this->lv_focused_overlay_selection = vis_line_t(total) - 1_vl;
         }
         if (this->lv_focused_overlay_selection < 0_vl) {
             this->lv_focused_overlay_selection = 0_vl;
         }
-        auto max_top = vis_line_t(total - count);
         if (this->lv_focused_overlay_selection <= this->lv_focused_overlay_top)
         {
             this->lv_focused_overlay_top = this->lv_focused_overlay_selection;
@@ -444,7 +456,27 @@ listview_curses::get_overlay_top(vis_line_t row, size_t count, size_t total)
         return this->lv_focused_overlay_top;
     }
 
-    return 0_vl;
+    auto retval = 0_vl;
+
+    for (size_t lpc = 0; lpc < total; lpc++) {
+        const auto& oc_line = overlay_content[lpc];
+        auto saw_opt = get_string_attr(oc_line.al_attrs, VC_ANCHOR);
+
+        if (saw_opt && saw_opt.value().get() == "default-focus"_frag) {
+            auto ov_sel = vis_line_t(lpc);
+
+            if (ov_sel >= count) {
+                retval = ov_sel - vis_line_t(count) + 2_vl;
+            }
+
+            break;
+        }
+    }
+    if (retval > max_top) {
+        retval = max_top;
+    }
+
+    return retval;
 }
 
 bool
@@ -453,7 +485,7 @@ listview_curses::do_update()
     static auto& vc = view_colors::singleton();
     bool retval = false;
 
-    if (this->lv_window == nullptr || this->lv_height == 0 || !this->vc_visible)
+    if (this->vc_window == nullptr || this->lv_height == 0 || !this->vc_visible)
     {
         return view_curses::do_update();
     }
@@ -523,7 +555,7 @@ listview_curses::do_update()
             al.al_attrs.emplace_back(hline_lr, VC_GRAPHIC.value(NCACS_HLINE));
             al.al_attrs.emplace_back(line_range{(int) width - 1, (int) width},
                                      VC_GRAPHIC.value(NCACS_URCORNER));
-            mvwattrline(this->lv_window,
+            mvwattrline(this->vc_window,
                         y,
                         x,
                         al,
@@ -533,8 +565,8 @@ listview_curses::do_update()
             y += 1;
             for (auto border_y = y; border_y < bottom; border_y++) {
                 ncplane_putstr_yx(
-                    this->lv_window, border_y, this->vc_x, NCACS_VLINE);
-                ncplane_set_cell_yx(this->lv_window,
+                    this->vc_window, border_y, this->vc_x, NCACS_VLINE);
+                ncplane_set_cell_yx(this->vc_window,
                                     border_y,
                                     x,
                                     NCSTYLE_ALTCHARSET,
@@ -551,7 +583,7 @@ listview_curses::do_update()
                     *this, y - this->vc_y, bottom - this->vc_y, overlay_line))
             {
                 this->lv_display_lines.push_back(static_overlay_content{});
-                mvwattrline(this->lv_window, y, x, overlay_line, lr);
+                mvwattrline(this->vc_window, y, x, overlay_line, lr);
                 overlay_line.clear();
                 ++y;
             } else if (row < (int) row_count) {
@@ -567,11 +599,11 @@ listview_curses::do_update()
                     this->lv_display_lines.push_back(
                         main_content{row, wrapped_line, lr});
                     if (this->lv_word_wrap) {
-                        // XXX mvwhline(this->lv_window, y, this->vc_x, ' ',
+                        // XXX mvwhline(this->vc_window, y, this->vc_x, ' ',
                         // width);
                     }
                     write_res = mvwattrline(
-                        this->lv_window, y, x, al, lr, this->vc_default_role);
+                        this->vc_window, y, x, al, lr, this->vc_default_role);
                     lr.lr_start = write_res.mr_chars_out;
                     lr.lr_end = write_res.mr_chars_out + width - 1;
                     wrapped_line += 1;
@@ -593,10 +625,10 @@ listview_curses::do_update()
                             break;
                         }
 
-                        this->lv_display_lines.push_back(overlay_menu{
+                        this->lv_display_lines.emplace_back(overlay_menu{
                             ov_menu_row,
                         });
-                        mvwattrline(this->lv_window,
+                        mvwattrline(this->vc_window,
                                     y,
                                     x,
                                     ov_menu_line,
@@ -612,7 +644,7 @@ listview_curses::do_update()
                         row_overlay_content.size(), height);
                     auto ov_height_remaining = overlay_height;
                     auto overlay_top = this->get_overlay_top(
-                        row, overlay_height, row_overlay_content.size());
+                        row, overlay_height, row_overlay_content);
                     auto overlay_row = overlay_top;
                     if (row_overlay_content.size() > 1) {
                         auto hdr
@@ -625,7 +657,7 @@ listview_curses::do_update()
                                 VC_STYLE.value(ov_hdr_attrs));
                             this->lv_display_lines.emplace_back(
                                 static_overlay_content{});
-                            mvwattrline(this->lv_window,
+                            mvwattrline(this->vc_window,
                                         y,
                                         x,
                                         ov_hdr,
@@ -651,7 +683,7 @@ listview_curses::do_update()
                             overlay_height,
                             vis_line_t{(int) row_overlay_content.size()},
                         });
-                        mvwattrline(this->lv_window,
+                        mvwattrline(this->vc_window,
                                     y,
                                     x,
                                     row_overlay_content[overlay_row],
@@ -701,9 +733,9 @@ listview_curses::do_update()
                             }
                             attrs = vc.attrs_for_role(role);
                             ncplane_putstr_yx(
-                                this->lv_window, gutter_y, x + width - 2, ch);
+                                this->vc_window, gutter_y, x + width - 2, ch);
                             ncplane_set_cell_yx(
-                                this->lv_window,
+                                this->vc_window,
                                 gutter_y,
                                 x + width - 2,
                                 attrs.ta_attrs | NCSTYLE_ALTCHARSET,
@@ -716,14 +748,14 @@ listview_curses::do_update()
             } else {
                 nccell clear_cell;
                 nccell_init(&clear_cell);
-                nccell_prime(this->lv_window,
+                nccell_prime(this->vc_window,
                              &clear_cell,
                              " ",
                              0,
                              view_colors::to_channels(role_attrs));
-                ncplane_cursor_move_yx(this->lv_window, y, x);
-                ncplane_hline(this->lv_window, &clear_cell, width);
-                nccell_release(this->lv_window, &clear_cell);
+                ncplane_cursor_move_yx(this->vc_window, y, x);
+                ncplane_hline(this->vc_window, &clear_cell, width);
+                nccell_release(this->vc_window, &clear_cell);
 
                 this->lv_display_lines.push_back(empty_space{});
                 ++y;
@@ -779,8 +811,8 @@ listview_curses::do_update()
                     role = bar_role;
                 }
                 attrs = vc.attrs_for_role(role);
-                ncplane_putstr_yx(this->lv_window, gutter_y, x + width - 1, ch);
-                ncplane_set_cell_yx(this->lv_window,
+                ncplane_putstr_yx(this->vc_window, gutter_y, x + width - 1, ch);
+                ncplane_set_cell_yx(this->vc_window,
                                     gutter_y,
                                     x + width - 1,
                                     attrs.ta_attrs | NCSTYLE_ALTCHARSET,
@@ -792,7 +824,7 @@ listview_curses::do_update()
             auto bottom_y = this->vc_y + height - 1;
             for (size_t lpc = 0; lpc < width - 1; lpc++) {
                 ncplane_on_styles_yx(
-                    this->lv_window, bottom_y, x + lpc, NCSTYLE_UNDERLINE);
+                    this->vc_window, bottom_y, x + lpc, NCSTYLE_UNDERLINE);
             }
         }
 
@@ -1223,17 +1255,29 @@ listview_curses::layout_for_row(vis_line_t row) const
     {
         auto above_height_avail
             = height - retval.lr_desired_row_height - this->lv_tail_space;
-        auto curr_above_row = row - 1_vl;
-        while (curr_above_row >= 0_vl && above_height_avail > 0_vl) {
+        // scan forwards since that will be nicer to the line_buffer cache
+        auto highest_above_row = std::max(0_vl, row - above_height_avail);
+        for (auto curr_above_row = highest_above_row; curr_above_row < row;
+             ++curr_above_row)
+        {
             auto curr_above_height
                 = this->height_for_row(curr_above_row, height, width);
-
+            retval.lr_above_line_heights.emplace_back(curr_above_height);
+        }
+        std::reverse(retval.lr_above_line_heights.begin(),
+                     retval.lr_above_line_heights.end());
+        auto above_limit = std::optional<size_t>();
+        for (const auto& [index, curr_above_height] :
+             lnav::itertools::enumerate(retval.lr_above_line_heights))
+        {
             above_height_avail -= curr_above_height;
             if (above_height_avail < 0_vl) {
+                above_limit = index;
                 break;
             }
-            curr_above_row -= 1_vl;
-            retval.lr_above_line_heights.emplace_back(curr_above_height);
+        }
+        if (above_limit) {
+            retval.lr_above_line_heights.resize(above_limit.value());
         }
     }
     {
@@ -1450,7 +1494,6 @@ listview_curses::set_overlay_selection(std::optional<vis_line_t> sel)
         this->lv_overlay_source->list_value_for_overlay(
             *this, this->get_selection().value(), overlay_content);
         if (!overlay_content.empty()) {
-            this->lv_overlay_focused = true;
             if (sel.value() < 0) {
                 this->lv_focused_overlay_selection = 0_vl;
             } else if (sel.value() >= (ssize_t) overlay_content.size()) {
@@ -1465,6 +1508,11 @@ listview_curses::set_overlay_selection(std::optional<vis_line_t> sel)
             auto overlay_height = vis_line_t(
                 this->get_overlay_height(overlay_content.size(), height));
 
+            if (!this->lv_overlay_focused) {
+                this->lv_focused_overlay_top = this->get_overlay_top(
+                    this->lv_selection, overlay_height, overlay_content);
+                this->lv_overlay_focused = true;
+            }
             if (this->lv_selection + overlay_height >= bot) {
                 this->set_top(this->lv_selection, true);
             }
@@ -1483,4 +1531,18 @@ listview_curses::get_y_for_selection() const
 {
     return this->get_y()
         + (int) (this->get_selection().value_or(0_vl) - this->get_top());
+}
+
+void
+listview_curses::update_hash_state(hasher& h) const
+{
+    const auto [width, height] = this->get_dimensions();
+
+    h.update(width);
+    h.update(height);
+    h.update(this->lv_top);
+    h.update(this->lv_left);
+    h.update(this->get_selection().value_or(-1_vl));
+    h.update(this->get_inner_height());
+    h.update(this->get_overlay_selection().value_or(-1_vl));
 }

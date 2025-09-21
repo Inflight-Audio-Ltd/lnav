@@ -617,6 +617,14 @@ EOF
 
 run_cap_test ./drive_logfile -t -f logfmt_log ${srcdir}/logfile_grafana.0
 
+run_cap_test ./drive_logfile -t -f postgres_log ${srcdir}/logfile_postgres.0
+
+run_cap_test ./drive_logfile -t -f mysql_slow_log ${srcdir}/logfile_mysql_slow.0
+
+run_cap_test ./drive_logfile -t -f mysql_error_log ${srcdir}/logfile_mysql_error.0
+
+run_cap_test ./drive_logfile -t -f mysql_gen_log ${srcdir}/logfile_mysql_gen.0
+
 run_test ${lnav_test} -C ${test_dir}/logfile_bad_access_log.0
 
 sed -ibak -e "s|/.*/logfile_bad_access_log.0|logfile_bad_access_log.0|g" `test_err_filename`
@@ -764,3 +772,9 @@ run_cap_test env TZ=America/Los_Angeles ${lnav_test} -n \
 
 cat ${test_dir}/logfile_generic.0 | run_cap_test ${lnav_test} -n \
     -c ':test-comment generic before piper'
+
+run_cap_test ${lnav_test} -n ${test_dir}/logfile_logfmt.0
+
+run_cap_test ${lnav_test} -n ${test_dir}/logfile_laravel.0
+
+run_cap_test ${lnav_test} -n ${test_dir}/logfile_laravel.1

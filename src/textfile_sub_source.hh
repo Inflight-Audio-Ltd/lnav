@@ -232,7 +232,7 @@ private:
 
     std::deque<file_view_state> tss_files;
     size_t tss_line_indent_size{0};
-    bool tss_completed_last_scan{true};
+    bool tss_last_scan_aborted{false};
     attr_line_t tss_hex_line;
     string_attrs_t tss_plain_line_attrs;
     int64_t tss_content_line{0};
@@ -253,6 +253,8 @@ public:
 private:
     textfile_sub_source* tho_src;
     text_sub_source* tho_log_src;
+    std::vector<attr_line_t> tho_static_lines;
+    hasher::array_t tho_filter_state;
 };
 
 #endif

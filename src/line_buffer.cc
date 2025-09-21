@@ -466,8 +466,7 @@ line_buffer::set_fd(auto_fd& fd)
                     if (this->lb_file_time < 0) {
                         this->lb_file_time = 0;
                     }
-                    this->lb_compressed_offset
-                        = lseek(this->lb_fd, 0, SEEK_CUR);
+                    this->lb_compressed_offset = 0;
                     if (!hdr.empty()) {
                         this->lb_header = std::move(hdr);
                     }
@@ -638,6 +637,7 @@ line_buffer::load_next_buffer()
                           start + this->lb_alt_buffer.value().size(),
                           this->lb_alt_buffer.value().available());
             this->lb_compressed_offset = gi->get_source_offset();
+            ensure(this->lb_compressed_offset >= 0);
             if (rc != -1
                 && rc < (ssize_t) this->lb_alt_buffer.value().available()
                 && (start + (ssize_t) this->lb_alt_buffer.value().size() + rc
@@ -703,7 +703,7 @@ line_buffer::load_next_buffer()
             rc = BZ2_bzread(bz_file,
                             this->lb_alt_buffer->end(),
                             this->lb_alt_buffer->available());
-            this->lb_compressed_offset = lseek(bzfd, 0, SEEK_SET);
+            this->lb_compressed_offset = 0;
             BZ2_bzclose(bz_file);
 
             if (rc != -1
@@ -849,8 +849,8 @@ line_buffer::fill_range(file_off_t start,
     {
         /* Cache already has the data, nothing to do. */
         retval = true;
-        if (!lnav::pid::in_child && this->lb_seekable && this->lb_buffer.full()
-            && !this->lb_loader_file_offset)
+        if (this->lb_do_preloading && !lnav::pid::in_child && this->lb_seekable
+            && this->lb_buffer.full() && !this->lb_loader_file_offset)
         {
             // log_debug("loader available start=%d", start);
             auto last_lf_iter = std::find(
@@ -911,6 +911,7 @@ line_buffer::fill_range(file_off_t start,
                               this->lb_file_offset + this->lb_buffer.size(),
                               this->lb_buffer.available());
                 this->lb_compressed_offset = gi->get_source_offset();
+                ensure(this->lb_compressed_offset >= 0);
                 if (rc != -1 && (rc < (ssize_t) this->lb_buffer.available())) {
                     this->lb_file_size
                         = (this->lb_file_offset + this->lb_buffer.size() + rc);
@@ -974,7 +975,7 @@ line_buffer::fill_range(file_off_t start,
                 rc = BZ2_bzread(bz_file,
                                 this->lb_buffer.end(),
                                 this->lb_buffer.available());
-                this->lb_compressed_offset = lseek(bzfd, 0, SEEK_SET);
+                this->lb_compressed_offset = 0;
                 BZ2_bzclose(bz_file);
 
                 if (rc != -1 && (rc < (ssize_t) this->lb_buffer.available())) {
@@ -1063,8 +1064,8 @@ line_buffer::fill_range(file_off_t start,
                 break;
         }
 
-        if (!lnav::pid::in_child && this->lb_seekable && this->lb_buffer.full()
-            && !this->lb_loader_file_offset)
+        if (this->lb_do_preloading && !lnav::pid::in_child && this->lb_seekable
+            && this->lb_buffer.full() && !this->lb_loader_file_offset)
         {
             // log_debug("loader available2 start=%d", start);
             auto last_lf_iter = std::find(
@@ -1146,7 +1147,9 @@ line_buffer::load_next_line(file_range prev_line)
             this->lb_buffer.begin(), this->lb_buffer.size()));
         this->lb_is_utf8 = is_utf_res.is_valid();
         if (!this->lb_is_utf8) {
-            log_warning("input is not utf8 -- %s", is_utf_res.usr_message);
+            log_warning("fd(%d): input is not utf8 -- %s",
+                        this->lb_fd.get(),
+                        is_utf_res.usr_message);
         }
     }
     while (!done) {
@@ -1229,7 +1232,8 @@ line_buffer::load_next_line(file_range prev_line)
             }
             retval.li_utf8_scan_result = scan_res;
             if (!scan_res.is_valid()) {
-                log_warning("line is not utf8 -- %lld",
+                log_warning("fd(%d): line is not utf8 -- %lld",
+                            this->lb_fd.get(),
                             retval.li_file_range.fr_offset);
             }
         }
@@ -1560,34 +1564,63 @@ line_buffer::enable_cache()
     this->lb_cached_fd = std::move(write_fd);
 }
 
-void
+std::future<void>
 line_buffer::cleanup_cache()
 {
-    (void) std::async(std::launch::async, []() {
-        auto now = std::filesystem::file_time_type::clock::now();
-        auto cache_path = line_buffer_cache_path();
-        std::vector<std::filesystem::path> to_remove;
-        std::error_code ec;
+    return std::async(
+        std::launch::async, +[]() {
+            auto now = std::filesystem::file_time_type::clock::now();
+            auto cache_path = line_buffer_cache_path();
+            std::vector<std::filesystem::path> to_remove;
+            std::error_code ec;
 
-        for (const auto& cache_subdir :
-             std::filesystem::directory_iterator(cache_path, ec))
-        {
-            for (const auto& entry :
-                 std::filesystem::directory_iterator(cache_subdir, ec))
+            for (const auto& cache_subdir :
+                 std::filesystem::directory_iterator(cache_path, ec))
             {
-                auto mtime = std::filesystem::last_write_time(entry.path());
-                auto exp_time = mtime + 1h;
-                if (now < exp_time) {
-                    continue;
+                for (const auto& entry :
+                     std::filesystem::directory_iterator(cache_subdir, ec))
+                {
+                    auto mtime = std::filesystem::last_write_time(entry.path());
+                    auto exp_time = mtime + 1h;
+                    if (now < exp_time) {
+                        continue;
+                    }
+
+                    to_remove.emplace_back(entry.path());
                 }
-
-                to_remove.emplace_back(entry.path());
             }
-        }
 
-        for (auto& entry : to_remove) {
-            log_debug("removing compressed file cache: %s", entry.c_str());
-            std::filesystem::remove_all(entry, ec);
-        }
-    });
+            for (auto& entry : to_remove) {
+                log_debug("removing compressed file cache: %s", entry.c_str());
+                std::filesystem::remove_all(entry, ec);
+            }
+        });
+}
+
+void
+line_buffer::send_initial_load()
+{
+    if (!this->lb_seekable) {
+        log_warning("file is not seekable, not doing preload");
+        return;
+    }
+
+    if (this->lb_loader_future.valid()) {
+        log_warning("preload is already active");
+        return;
+    }
+
+    log_debug("sending initial load");
+    if (!this->lb_alt_buffer) {
+        // log_debug("allocating new buffer!");
+        this->lb_alt_buffer = auto_buffer::alloc(this->lb_buffer.capacity());
+    }
+    this->lb_loader_file_offset = 0;
+    auto prom = std::make_shared<std::promise<bool>>();
+    this->lb_loader_future = prom->get_future();
+    this->lb_stats.s_requested_preloads += 1;
+    isc::to<io_looper&, io_looper_tag>().send(
+        [this, prom](auto& ioloop) mutable {
+            prom->set_value(this->load_next_buffer());
+        });
 }

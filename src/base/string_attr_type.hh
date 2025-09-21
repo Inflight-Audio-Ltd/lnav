@@ -172,6 +172,8 @@ enum class role_t : int32_t {
     VCR_SELECTED_TEXT,
     VCR_FUZZY_MATCH,
 
+    VCR_OBJECT_KEY,
+
     VCR__MAX
 };
 
@@ -309,7 +311,7 @@ struct text_attrs {
 };
 
 struct block_elem_t {
-    wchar_t value;
+    char32_t value;
     role_t role;
 
     bool operator==(const block_elem_t& rhs) const
@@ -398,6 +400,10 @@ public:
 
 extern const string_attr_type<void> SA_ORIGINAL_LINE;
 extern const string_attr_type<void> SA_BODY;
+extern const string_attr_type<void> SA_SRC_FILE;
+extern const string_attr_type<void> SA_SRC_LINE;
+extern const string_attr_type<void> SA_THREAD_ID;
+extern const string_attr_type<void> SA_EXTRA_CONTENT;
 extern const string_attr_type<ui_icon_t> SA_HIDDEN;
 extern const string_attr_type<void> SA_REPLACED;
 extern const string_attr_type<intern_string_t> SA_FORMAT;
@@ -409,6 +415,7 @@ extern const string_attr_type<int64_t> SA_LEVEL;
 extern const string_attr_type<int64_t> SA_ORIGIN_OFFSET;
 extern const string_attr_type<text_format_t> SA_QUOTED_TEXT;
 
+extern const string_attr_type<std::string> VC_ANCHOR;
 extern const string_attr_type<role_t> VC_ROLE;
 extern const string_attr_type<role_t> VC_ROLE_FG;
 extern const string_attr_type<text_attrs> VC_STYLE;

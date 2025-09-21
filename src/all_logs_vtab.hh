@@ -50,6 +50,7 @@ public:
 
     void extract(logfile* lf,
                  uint64_t line_number,
+                 string_attrs_t& sa,
                  logline_value_vector& values) override;
 
     bool next(log_cursor& lc, logfile_sub_source& lss) override;
@@ -58,6 +59,8 @@ private:
     logline_value_meta alv_msg_meta;
     logline_value_meta alv_schema_meta;
     logline_value_meta alv_values_meta;
+    logline_value_meta alv_src_meta;
+    logline_value_meta alv_thread_meta;
 };
 
 #endif  // LNAV_ALL_LOGS_VTAB_HH

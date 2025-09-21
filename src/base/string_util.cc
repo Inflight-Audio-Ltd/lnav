@@ -45,15 +45,17 @@ using namespace std::string_view_literals;
 void
 scrub_to_utf8(char* buffer, size_t length)
 {
-    while (true) {
-        auto frag = string_fragment::from_bytes(buffer, length);
-        auto scan_res = is_utf8(frag);
-
-        if (scan_res.is_valid()) {
-            break;
-        }
-        for (size_t lpc = 0; lpc < scan_res.usr_faulty_bytes; lpc++) {
-            buffer[scan_res.usr_valid_frag.sf_end + lpc] = '?';
+    size_t index = 0;
+    while (index < length) {
+        auto start_index = index;
+        auto ch_res = ww898::utf::utf8::read([buffer, &index, length]() {
+            if (index < length) {
+                return buffer[index++];
+            }
+            return '\x00';
+        });
+        if (ch_res.isErr()) {
+            buffer[start_index] = '?';
         }
     }
 }
@@ -212,13 +214,6 @@ utf8_char_to_byte_index(const std::string& str, ssize_t ch_index)
     }
 
     return retval;
-}
-bool
-is_url(const std::string& fn)
-{
-    static const auto url_re = std::regex("^(file|https?|ftps?|scp|sftp):.*");
-
-    return std::regex_match(fn, url_re);
 }
 
 size_t
@@ -448,9 +443,9 @@ char_escape_seq(char ch)
             return "\\t";
         case '\n':
             return "\\n";
+        default:
+            return std::nullopt;
     }
-
-    return std::nullopt;
 }
 
 std::string

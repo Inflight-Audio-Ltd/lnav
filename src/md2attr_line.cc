@@ -32,6 +32,8 @@
 #include "md2attr_line.hh"
 
 #include "base/attr_line.builder.hh"
+#include "base/from_trait.hh"
+#include "base/fs_util.hh"
 #include "base/intern_string.hh"
 #include "base/itertools.enumerate.hh"
 #include "base/itertools.hh"
@@ -41,6 +43,7 @@
 #include "base/types.hh"
 #include "document.sections.hh"
 #include "lnav.script.parser.hh"
+#include "mapbox/variant.hpp"
 #include "pcrepp/pcre2pp.hh"
 #include "pugixml/pugixml.hpp"
 #include "readline_highlighters.hh"
@@ -147,6 +150,8 @@ md2attr_line::enter_block(const md4cpp::event_handler::block& bl)
             this->ml_tables.back().t_rows.size() + 1);
     } else if (bl.is<MD_BLOCK_CODE_DETAIL*>()) {
         this->ml_code_depth += 1;
+    } else if (bl.is<block_html>()) {
+        this->ml_in_html_block = true;
     }
 
     return Ok();
@@ -282,7 +287,7 @@ md2attr_line::leave_block(const md4cpp::event_handler::block& bl)
                 if (!hl.applies_to_format(tf_opt.value())) {
                     continue;
                 }
-                hl.annotate(block_text, 0);
+                hl.annotate(block_text, line_range{0, -1});
             }
         } else if (lang_sf == "lnav") {
             readline_lnav_highlighter(block_text, block_text.length());
@@ -296,8 +301,10 @@ md2attr_line::leave_block(const md4cpp::event_handler::block& bl)
                 mda.final();
             }
             tf_opt = std::make_optional(text_format_t::TF_LNAV_SCRIPT);
-        } else if (lang_sf.is_one_of("sql", "sqlite", "prql")) {
-            readline_sqlite_highlighter(block_text, block_text.length());
+        } else if (lang_sf.is_one_of("sql", "sqlite", "prql", "plpgsql")) {
+            auto from_res = from<lnav::sql::dialect>(lang_sf);
+            auto dia = from_res.unwrap();
+            readline_sql_highlighter(block_text, dia, block_text.length());
             tf_opt = std::make_optional(text_format_t::TF_SQL);
         } else if (lang_sf.is_one_of("shell", "bash")) {
             readline_shlex_highlighter(block_text, block_text.length());
@@ -462,7 +469,10 @@ md2attr_line::leave_block(const md4cpp::event_handler::block& bl)
         }
         if (!padded_text.empty()) {
             padded_text.with_attr_for_all(SA_PREFORMATTED.value());
-            last_block.append("\n").append(padded_text);
+            if (!endswith(last_block.al_string, "\n\n")) {
+                last_block.append("\n");
+            }
+            last_block.append(padded_text);
         }
     } else if (bl.is<MD_BLOCK_TABLE_DETAIL*>()) {
         auto* table_detail = bl.get<MD_BLOCK_TABLE_DETAIL*>();
@@ -612,14 +622,31 @@ md2attr_line::leave_block(const md4cpp::event_handler::block& bl)
             td_detail->align, block_text);
     } else {
         if (bl.is<block_html>()) {
+            this->ml_in_html_block = false;
             if (startswith(block_text.get_string(), "<!--")) {
                 return Ok();
+            }
+
+            pugi::xml_document doc;
+
+            auto load_res = doc.load_string(block_text.al_string.c_str());
+            if (!load_res) {
+                log_error("XML parsing failure at %d: %s",
+                          load_res.offset,
+                          load_res.description());
+
+                auto sf = block_text.to_string_fragment();
+                auto error_line = sf.find_boundaries_around(
+                    load_res.offset, string_fragment::tag1{'\n'});
+                log_error("  %.*s", error_line.length(), error_line.data());
+            } else {
+                block_text = this->to_attr_line(doc, block_text);
             }
         }
 
         text_wrap_settings tws = {0, this->ml_blocks.size() == 1 ? 70 : 10000};
 
-        if (!last_block.empty()) {
+        if (!last_block.empty() && !endswith(last_block.al_string, "\n\n")) {
             last_block.append("\n");
         }
         last_block.append(block_text, &tws);
@@ -823,193 +850,218 @@ span_style_border(border_side side, const string_fragment& value)
 }
 
 attr_line_t
-md2attr_line::to_attr_line(const pugi::xml_node& doc)
+md2attr_line::to_attr_line(const pugi::xml_node& doc, const attr_line_t& orig)
 {
-    static const auto NAME_IMG = "img"_frag;
-    static const auto NAME_SPAN = "span"_frag;
-    static const auto NAME_PRE = "pre"_frag;
-    static const auto NAME_FG = "color"_frag;
-    static const auto NAME_BG = "background-color"_frag;
-    static const auto NAME_FONT_WEIGHT = "font-weight"_frag;
-    static const auto NAME_TEXT_DECO = "text-decoration"_frag;
-    static const auto NAME_BORDER_LEFT = "border-left"_frag;
-    static const auto NAME_BORDER_RIGHT = "border-right"_frag;
+    static constexpr auto NAME_A = "a"_frag;
+    static constexpr auto NAME_IMG = "img"_frag;
+    static constexpr auto NAME_SPAN = "span"_frag;
+    static constexpr auto NAME_PRE = "pre"_frag;
+    static constexpr auto NAME_FG = "color"_frag;
+    static constexpr auto NAME_BG = "background-color"_frag;
+    static constexpr auto NAME_FONT_WEIGHT = "font-weight"_frag;
+    static constexpr auto NAME_TEXT_DECO = "text-decoration"_frag;
+    static constexpr auto NAME_BORDER_LEFT = "border-left"_frag;
+    static constexpr auto NAME_BORDER_RIGHT = "border-right"_frag;
+    static constexpr auto NAME_WHITE_SPACE = "white-space"_frag;
+    static constexpr auto VALUE_NOWRAP = "nowrap"_frag;
     static const auto& vc = view_colors::singleton();
 
     if (this->ml_source_path) {
-        log_trace("converting HTML to attr_line");
+        log_trace("converting HTML to attr_line: %s", doc.name());
     }
 
     attr_line_t retval;
-    if (doc.children().empty()) {
-        retval.append(doc.text().get());
-    }
-    for (const auto& child : doc.children()) {
-        if (child.name() == NAME_IMG) {
-            std::optional<std::string> src_href;
-            std::string link_label;
-            auto img_src = child.attribute("src");
-            auto img_alt = child.attribute("alt");
-            if (img_alt) {
-                link_label = img_alt.value();
-            } else if (img_src) {
-                link_label = std::filesystem::path(img_src.value())
-                                 .filename()
-                                 .string();
+    if (doc.name() == NAME_A) {
+        auto anc_al = attr_line_t();
+
+        for (const auto& sub : doc.children()) {
+            auto child_al = this->to_attr_line(sub, orig);
+            if (anc_al.empty() && startswith(child_al.get_string(), "\n")) {
+                child_al.erase(0, 1);
+            }
+            anc_al.append(child_al);
+        }
+        auto anchor_id = std::string();
+        if (auto doc_id = doc.attribute("id")) {
+            anchor_id = doc_id.value();
+        }
+        if (auto doc_name = doc.attribute("name")) {
+            anchor_id = doc_name.value();
+        }
+        anc_al.with_attr_for_all(VC_ANCHOR.value(anchor_id));
+        retval.append(anc_al);
+    } else if (doc.name() == NAME_IMG) {
+        std::optional<std::string> src_href;
+        std::string link_label;
+        auto img_src = doc.attribute("src");
+        auto img_alt = doc.attribute("alt");
+        if (img_alt) {
+            link_label = img_alt.value();
+        } else if (img_src) {
+            link_label
+                = std::filesystem::path(img_src.value()).filename().string();
+        } else {
+            link_label = "img";
+        }
+
+        if (img_src) {
+            auto src_value = std::string(img_src.value());
+            if (lnav::filesystem::is_url(src_value)) {
+                src_href = src_value;
             } else {
-                link_label = "img";
-            }
+                auto src_path = std::filesystem::path(src_value);
+                std::error_code ec;
 
-            if (img_src) {
-                auto src_value = std::string(img_src.value());
-                if (is_url(src_value)) {
-                    src_href = src_value;
-                } else {
-                    auto src_path = std::filesystem::path(src_value);
-                    std::error_code ec;
-
-                    if (src_path.is_relative() && this->ml_source_path) {
-                        src_path = this->ml_source_path.value().parent_path()
-                            / src_path;
-                    }
-                    auto canon_path = std::filesystem::canonical(src_path, ec);
-                    if (!ec) {
-                        src_path = canon_path;
-                    }
-
-                    src_href = fmt::format(FMT_STRING("file://{}"),
-                                           src_path.string());
+                if (src_path.is_relative() && this->ml_source_path) {
+                    src_path
+                        = this->ml_source_path.value().parent_path() / src_path;
                 }
+                auto canon_path = std::filesystem::canonical(src_path, ec);
+                if (!ec) {
+                    src_path = canon_path;
+                }
+
+                src_href
+                    = fmt::format(FMT_STRING("file://{}"), src_path.string());
             }
+        }
 
-            if (src_href) {
-                retval.append(":framed_picture:"_emoji)
-                    .append("  ")
-                    .append(
-                        lnav::string::attrs::href(link_label, src_href.value()))
-                    .append(to_superscript(this->ml_footnotes.size() + 1));
+        if (src_href) {
+            retval.append(":framed_picture:"_emoji)
+                .append("  ")
+                .append(lnav::string::attrs::href(link_label, src_href.value()))
+                .append(to_superscript(this->ml_footnotes.size() + 1));
 
-                auto href
-                    = attr_line_t()
-                          .append(lnav::roles::hyperlink(src_href.value()))
-                          .append(" ")
-                          .with_attr_for_all(
-                              VC_ROLE.value(role_t::VCR_FOOTNOTE_TEXT))
-                          .with_attr_for_all(SA_PREFORMATTED.value())
-                          .move();
-                this->ml_footnotes.emplace_back(href);
+            auto href = attr_line_t()
+                            .append(lnav::roles::hyperlink(src_href.value()))
+                            .append(" ")
+                            .with_attr_for_all(
+                                VC_ROLE.value(role_t::VCR_FOOTNOTE_TEXT))
+                            .with_attr_for_all(SA_PREFORMATTED.value())
+                            .move();
+            this->ml_footnotes.emplace_back(href);
+        } else {
+            retval.append(link_label);
+        }
+    } else if (doc.name() == NAME_SPAN) {
+        std::optional<attr_line_t> left_border;
+        std::optional<attr_line_t> right_border;
+        auto text_node = doc.text();
+        auto styled_span = text_node.empty()
+            ? attr_line_t()
+            : orig.subline(text_node.data().offset_debug(),
+                           strlen(text_node.get()));
+
+        auto span_class = doc.attribute("class");
+        if (span_class) {
+            auto cl_iter = vc.vc_class_to_role.find(span_class.value());
+
+            if (cl_iter == vc.vc_class_to_role.end()) {
+                log_error("unknown span class: %s", span_class.value());
             } else {
-                retval.append(link_label);
+                styled_span.with_attr_for_all(cl_iter->second);
             }
-        } else if (child.name() == NAME_SPAN) {
-            std::optional<attr_line_t> left_border;
-            std::optional<attr_line_t> right_border;
-            auto styled_span = attr_line_t(child.text().get());
+        }
+        text_attrs ta;
+        auto span_style = doc.attribute("style");
+        if (span_style) {
+            auto style_sf = string_fragment::from_c_str(span_style.value());
 
-            auto span_class = child.attribute("class");
-            if (span_class) {
-                auto cl_iter = vc.vc_class_to_role.find(span_class.value());
+            while (!style_sf.empty()) {
+                auto split_res
+                    = style_sf.split_when(string_fragment::tag1{';'});
+                auto colon_split_res
+                    = split_res.first.split_pair(string_fragment::tag1{':'});
+                if (colon_split_res) {
+                    auto key = colon_split_res->first.trim();
+                    auto value = colon_split_res->second.trim();
 
-                if (cl_iter == vc.vc_class_to_role.end()) {
-                    log_error("unknown span class: %s", span_class.value());
-                } else {
-                    styled_span.with_attr_for_all(cl_iter->second);
-                }
-            }
-            text_attrs ta;
-            auto span_style = child.attribute("style");
-            if (span_style) {
-                auto style_sf = string_fragment::from_c_str(span_style.value());
+                    if (key == NAME_FG) {
+                        auto color_res = styling::color_unit::from_str(value);
 
-                while (!style_sf.empty()) {
-                    auto split_res
-                        = style_sf.split_when(string_fragment::tag1{';'});
-                    auto colon_split_res = split_res.first.split_pair(
-                        string_fragment::tag1{':'});
-                    if (colon_split_res) {
-                        auto key = colon_split_res->first.trim();
-                        auto value = colon_split_res->second.trim();
+                        if (color_res.isErr()) {
+                            log_error("invalid color: %.*s -- %s",
+                                      value.length(),
+                                      value.data(),
+                                      color_res.unwrapErr().c_str());
+                        } else {
+                            ta.ta_fg_color = vc.match_color(color_res.unwrap());
+                        }
+                    } else if (key == NAME_BG) {
+                        auto color_res = styling::color_unit::from_str(value);
 
-                        if (key == NAME_FG) {
-                            auto color_res
-                                = styling::color_unit::from_str(value);
+                        if (color_res.isErr()) {
+                            log_error("invalid background-color: %.*s -- %s",
+                                      value.length(),
+                                      value.data(),
+                                      color_res.unwrapErr().c_str());
+                        } else {
+                            ta.ta_bg_color = vc.match_color(color_res.unwrap());
+                        }
+                    } else if (key == NAME_FONT_WEIGHT) {
+                        if (value.is_one_of("bold", "bolder")) {
+                            ta |= text_attrs::style::bold;
+                        }
+                    } else if (key == NAME_TEXT_DECO) {
+                        auto deco_sf = value;
 
-                            if (color_res.isErr()) {
-                                log_error("invalid color: %.*s -- %s",
-                                          value.length(),
-                                          value.data(),
-                                          color_res.unwrapErr().c_str());
-                            } else {
-                                ta.ta_fg_color
-                                    = vc.match_color(color_res.unwrap());
+                        while (!deco_sf.empty()) {
+                            auto deco_split_res = deco_sf.split_when(
+                                string_fragment::tag1{' '});
+
+                            if (deco_split_res.first.trim() == "underline") {
+                                ta |= text_attrs::style::underline;
                             }
-                        } else if (key == NAME_BG) {
-                            auto color_res
-                                = styling::color_unit::from_str(value);
 
-                            if (color_res.isErr()) {
-                                log_error(
-                                    "invalid background-color: %.*s -- %s",
-                                    value.length(),
-                                    value.data(),
-                                    color_res.unwrapErr().c_str());
-                            } else {
-                                ta.ta_bg_color
-                                    = vc.match_color(color_res.unwrap());
-                            }
-                        } else if (key == NAME_FONT_WEIGHT) {
-                            if (value.is_one_of("bold", "bolder")) {
-                                ta |= text_attrs::style::bold;
-                            }
-                        } else if (key == NAME_TEXT_DECO) {
-                            auto deco_sf = value;
-
-                            while (!deco_sf.empty()) {
-                                auto deco_split_res = deco_sf.split_when(
-                                    string_fragment::tag1{' '});
-
-                                if (deco_split_res.first.trim() == "underline")
-                                {
-                                    ta |= text_attrs::style::underline;
-                                }
-
-                                deco_sf = deco_split_res.second;
-                            }
-                        } else if (key == NAME_BORDER_LEFT) {
-                            left_border
-                                = span_style_border(border_side::left, value);
-                        } else if (key == NAME_BORDER_RIGHT) {
-                            right_border
-                                = span_style_border(border_side::right, value);
+                            deco_sf = deco_split_res.second;
+                        }
+                    } else if (key == NAME_BORDER_LEFT) {
+                        left_border
+                            = span_style_border(border_side::left, value);
+                    } else if (key == NAME_BORDER_RIGHT) {
+                        right_border
+                            = span_style_border(border_side::right, value);
+                    } else if (key == NAME_WHITE_SPACE) {
+                        if (value == VALUE_NOWRAP) {
+                            styled_span.with_attr_for_all(
+                                SA_PREFORMATTED.value());
                         }
                     }
-                    style_sf = split_res.second;
                 }
-                if (!ta.empty()) {
-                    styled_span.with_attr_for_all(VC_STYLE.value(ta));
-                }
+                style_sf = split_res.second;
             }
-            if (left_border) {
-                retval.append(left_border.value());
+            if (!ta.empty()) {
+                styled_span.with_attr_for_all(VC_STYLE.value(ta));
             }
-            retval.append(styled_span);
-            if (right_border) {
-                retval.append(right_border.value());
-            }
-        } else if (child.name() == NAME_PRE) {
-            auto pre_al = attr_line_t();
+        }
+        if (left_border) {
+            retval.append(left_border.value());
+        }
+        retval.append(styled_span);
+        if (right_border) {
+            retval.append(right_border.value());
+        }
+    } else if (doc.name() == NAME_PRE) {
+        auto pre_al = attr_line_t();
 
-            for (const auto& sub : child.children()) {
-                auto child_al = this->to_attr_line(sub);
-                if (pre_al.empty() && startswith(child_al.get_string(), "\n")) {
-                    child_al.erase(0, 1);
-                }
-                pre_al.append(child_al);
+        for (const auto& sub : doc.children()) {
+            auto child_al = this->to_attr_line(sub, orig);
+            if (pre_al.empty() && startswith(child_al.get_string(), "\n")) {
+                child_al.erase(0, 1);
             }
-            pre_al.with_attr_for_all(SA_PREFORMATTED.value());
-            retval.append(pre_al);
-        } else {
-            retval.append(child.text().get());
+            pre_al.append(child_al);
+        }
+        pre_al.with_attr_for_all(SA_PREFORMATTED.value());
+        retval.append(pre_al);
+    } else {
+        auto text_node = doc.text();
+        auto styled_text = text_node.empty()
+            ? attr_line_t()
+            : orig.subline(text_node.data().offset_debug(),
+                           strlen(text_node.get()));
+        retval.append(styled_text);
+        for (const auto& child : doc.children()) {
+            retval.append(this->to_attr_line(child, orig));
         }
     }
 
@@ -1045,6 +1097,10 @@ md2attr_line::text(MD_TEXTTYPE tt, const string_fragment& sf)
         case MD_TEXT_HTML: {
             auto last_block_start_length = last_block.length();
             last_block.append(sf);
+
+            if (this->ml_in_html_block) {
+                break;
+            }
 
             struct open_tag {
                 std::string ot_name;
@@ -1085,9 +1141,6 @@ md2attr_line::text(MD_TEXTTYPE tt, const string_fragment& sf)
             if (tag.valid()) {
                 tag.match(
                     [this, last_block_start_length](const open_tag& ot) {
-                        if (!this->ml_html_starts.empty()) {
-                            return;
-                        }
                         this->ml_html_starts.emplace_back(
                             ot.ot_name, last_block_start_length);
                     },
@@ -1104,8 +1157,9 @@ md2attr_line::text(MD_TEXTTYPE tt, const string_fragment& sf)
                             return;
                         }
 
-                        const auto html_span = last_block.get_string().substr(
+                        const auto html_span_attr = last_block.subline(
                             this->ml_html_starts.back().second);
+                        const auto& html_span = html_span_attr.al_string;
 
                         pugi::xml_document doc;
 
@@ -1124,7 +1178,8 @@ md2attr_line::text(MD_TEXTTYPE tt, const string_fragment& sf)
                         } else {
                             last_block.erase(
                                 this->ml_html_starts.back().second);
-                            last_block.append(this->to_attr_line(doc));
+                            last_block.append(
+                                this->to_attr_line(doc, html_span_attr));
                         }
                         this->ml_html_starts.pop_back();
                     },
@@ -1147,7 +1202,8 @@ md2attr_line::text(MD_TEXTTYPE tt, const string_fragment& sf)
                                       error_line.data());
                         } else {
                             last_block.erase(last_block_start_length);
-                            last_block.append(this->to_attr_line(doc));
+                            last_block.append(
+                                this->to_attr_line(doc, attr_line_t{}));
                         }
                     });
             }

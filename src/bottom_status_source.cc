@@ -45,7 +45,7 @@ bottom_status_source::bottom_status_source()
     this->bss_fields[BSF_LOADING].set_width(13);
     this->bss_fields[BSF_LOADING].right_justify(true);
     this->bss_fields[BSF_HELP].set_width(14);
-    this->bss_fields[BSF_HELP].set_value("?:View Help");
+    this->bss_fields[BSF_HELP].set_value("?:View Help"_frag);
     this->bss_fields[BSF_HELP].right_justify(true);
     this->bss_prompt.set_left_pad(1);
     this->bss_prompt.set_min_width(35);
@@ -65,11 +65,11 @@ bottom_status_source::update_line_number(listview_curses* lc)
     auto sel = lc->get_selection();
 
     if (lc->get_inner_height() == 0) {
-        sf.set_value(" L0");
+        sf.set_value(" L0"_frag);
     } else if (sel) {
         sf.set_value(" L%'d", (int) sel.value());
     } else {
-        sf.set_value(" L-");
+        sf.set_value(" L-"_frag);
     }
 
     this->bss_line_error.set_value(
@@ -133,24 +133,19 @@ bottom_status_source::update_marks(listview_curses* lc)
     status_field& sf = this->bss_fields[BSF_HITS];
     auto retval = false;
 
-    if (bm.find(&textview_curses::BM_SEARCH) != bm.end()) {
-        const auto& bv = bm[&textview_curses::BM_SEARCH];
+    const auto& bv = bm[&textview_curses::BM_SEARCH];
 
-        if (!bv.empty() || !tc->get_current_search().empty()) {
-            auto vl = tc->get_selection();
-            if (vl) {
-                auto lb = bv.bv_tree.find(vl.value());
-                if (lb != bv.bv_tree.end()) {
-                    retval = sf.set_value("  Hit %'d of %'d for ",
-                                          (lb - bv.bv_tree.begin()) + 1,
-                                          tc->get_match_count());
-                } else {
-                    retval = sf.set_value("  %'d hits for ",
-                                          tc->get_match_count());
-                }
+    if (!bv.empty() || !tc->get_current_search().empty()) {
+        auto vl = tc->get_selection();
+        if (vl) {
+            auto lb = bv.bv_tree.find(vl.value());
+            if (lb != bv.bv_tree.end()) {
+                retval = sf.set_value("  Hit %'d of %'d for ",
+                                      (lb - bv.bv_tree.begin()) + 1,
+                                      tc->get_match_count());
+            } else {
+                retval = sf.set_value("  %'d hits for ", tc->get_match_count());
             }
-        } else {
-            retval = sf.clear();
         }
     } else {
         retval = sf.clear();
@@ -174,8 +169,8 @@ bottom_status_source::update_hits(textview_curses* tc)
         }
         if (!sf.is_cylon()) {
             sf.set_cylon(true);
-            retval = true;
         }
+        retval = true;
     } else {
         new_role = role_t::VCR_STATUS;
         if (sf.is_cylon()) {
@@ -197,14 +192,14 @@ bottom_status_source::update_loading(file_off_t off,
 {
     auto& sf = this->bss_fields[BSF_LOADING];
 
-    require(off >= 0);
+    require_ge(off, 0);
     require_ge(total, off);
 
     if (total == 0) {
         sf.set_cylon(false);
         sf.set_role(role_t::VCR_STATUS);
         if (this->bss_paused) {
-            sf.set_value("\xE2\x80\x96 Paused");
+            sf.set_value("\xE2\x80\x96 Paused"_frag);
         } else {
             sf.clear();
         }

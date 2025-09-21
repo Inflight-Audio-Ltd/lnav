@@ -41,6 +41,7 @@
 
 #include "view_curses.hh"
 #include "vis_line.hh"
+#include "hasher.hh"
 
 class listview_curses;
 
@@ -339,16 +340,9 @@ public:
             }
         }
 
-        this->lv_source->listview_value_for_rows(
-            *this, sel.value(), top_line);
+        this->lv_source->listview_value_for_rows(*this, sel.value(), top_line);
         return func(top_line[0]);
     }
-
-    /** @param win The curses window this view is attached to. */
-    void set_window(ncplane* win) { this->lv_window = win; }
-
-    /** @return The curses window this view is attached to. */
-    ncplane* get_window() const { return this->lv_window; }
 
     /**
      * Set the line number to be displayed at the top of the view.  If the
@@ -512,6 +506,8 @@ public:
 
     vis_line_t get_tail_space() const { return this->lv_tail_space; }
 
+    virtual void update_hash_state(hasher& h) const;
+
     void log_state() override
     {
         log_debug("listview_curses=%p", this);
@@ -566,7 +562,9 @@ protected:
 
     void update_top_from_selection();
 
-    vis_line_t get_overlay_top(vis_line_t row, size_t count, size_t total);
+    vis_line_t get_overlay_top(vis_line_t row,
+                               size_t count,
+                               const std::vector<attr_line_t>& total);
     vis_line_t get_overlay_height(size_t total, vis_line_t view_height) const;
 
     enum class lv_mode_t {
@@ -582,7 +580,6 @@ protected:
     std::list<list_input_delegate*> lv_input_delegates;
     list_overlay_source* lv_overlay_source{nullptr};
     action lv_scroll; /*< The scroll action. */
-    ncplane* lv_window{nullptr}; /*< The window that contains this view. */
     vis_line_t lv_top{0}; /*< The line at the top of the view. */
     int lv_left{0}; /*< The column at the left of the view. */
     vis_line_t lv_height{0}; /*< The abs/rel height of the view. */

@@ -36,24 +36,49 @@
 #include <stdlib.h>
 #include <sys/param.h>
 
+#ifdef HAVE_SYS_SYSCTL_H
+#    include <sys/sysctl.h>
+#endif
+
 #include "config.h"
 #include "fmt/format.h"
 #include "itertools.hh"
 #include "lnav_log.hh"
 #include "opt_util.hh"
+#include "pcrepp/pcre2pp.hh"
 #include "scn/scan.h"
 #include "short_alloc.h"
+#include "string_util.hh"
 
 #ifdef HAVE_LIBPROC_H
 #    include <libproc.h>
 #endif
 
 namespace lnav::filesystem {
+static bool
+have_cygdrive()
+{
+    static const auto RETVAL = access("/cygdrive", X_OK) == 0;
+
+    return RETVAL;
+}
+
+std::string
+escape_glob_for_win(std::string arg)
+{
+#if defined(__MSYS__)
+    std::replace(arg.begin(), arg.end(), '\\', '/');
+    std::replace(arg.begin(), arg.end(), '^', '\\');
+    return arg;
+#else
+    return arg;
+#endif
+}
 
 std::optional<std::filesystem::path>
 self_path()
 {
-#ifdef HAVE_LIBPROC_H
+#if defined(HAVE_LIBPROC_H) && defined(PROC_PIDPATHINFO_MAXSIZE)
     auto pid = getpid();
     char pathbuf[PROC_PIDPATHINFO_MAXSIZE];
 
@@ -64,6 +89,21 @@ self_path()
         log_info("self path: %s", pathbuf);
         return std::filesystem::path(pathbuf);
     }
+    return std::nullopt;
+#elif defined(HAVE_SYS_SYSCTL_H) && defined(KERN_PROC_PATHNAME)
+    char path[1024];
+    int mib[4];
+    size_t len = sizeof(path);
+
+    mib[0] = CTL_KERN;
+    mib[1] = KERN_PROC;
+    mib[2] = KERN_PROC_PATHNAME;
+    mib[3] = -1;  // current process
+
+    if (sysctl(mib, 4, path, &len, NULL, 0) == 0) {
+        return std::filesystem::path(path);
+    }
+    log_error("unable to determine path: %s", strerror(errno));
     return std::nullopt;
 #else
     std::error_code ec;
@@ -128,6 +168,9 @@ escape_path(const std::filesystem::path& p, path_type pt)
             case '?':
                 switch (pt) {
                     case path_type::normal:
+                    case path_type::windows:
+                    case path_type::remote:
+                    case path_type::url:
                         retval.push_back('\\');
                         break;
                     case path_type::pattern:
@@ -141,6 +184,132 @@ escape_path(const std::filesystem::path& p, path_type pt)
     }
 
     return retval;
+}
+
+bool
+is_url(const std::string& fn)
+{
+    static const auto url_re
+        = lnav::pcre2pp::code::from_const("^(file|https?|ftps?|scp|sftp):.*");
+
+    return url_re.find_in(fn).ignore_error().has_value();
+}
+
+path_type
+determine_path_type(const std::string& arg)
+{
+    if (is_glob(arg)) {
+        return path_type::pattern;
+    }
+
+    if (is_url(arg)) {
+        return path_type::url;
+    }
+
+    const auto colon_pos = arg.find(':');
+    if (colon_pos == std::string::npos) {
+        return path_type::normal;
+    }
+    if (colon_pos == 1) {
+        return path_type::windows;
+    }
+    return path_type::remote;
+}
+
+path_transcoder
+path_transcoder::from(std::string arg)
+{
+    if (cget(arg, 1).value_or('\0') != ':') {
+        std::optional<bool> caps;
+#if defined(__MSYS__)
+        if (arg.find('\\') != std::string::npos) {
+            std::replace(arg.begin(), arg.end(), '\\', '/');
+            caps = false;
+        }
+        if (startswith(arg, "//")) {
+        } else if (startswith(arg, "/")) {
+            auto cwd = std::filesystem::current_path();
+            auto cwd_iter = std::next(cwd.begin());
+            auto cwd_first_str = cwd_iter->string();
+            if (cwd_first_str == "cygdrive") {
+                auto drive_iter = std::next(cwd_iter);
+                if (drive_iter != cwd.end()) {
+                    auto cwd_drive_str = drive_iter->string();
+                    arg.insert(0, cwd_drive_str);
+                    arg.insert(0, "/");
+                    caps = true;
+                }
+            }
+            arg.insert(0, cwd_first_str);
+            arg.insert(0, "/");
+        }
+#endif
+        return {arg, caps};
+    }
+
+    bool caps = isupper(arg[0]);
+    if (caps) {
+        arg[0] = tolower(arg[0]);
+    }
+
+    switch (cget(arg, 2).value_or('\0')) {
+        case '\\':
+        case '/':
+            arg.erase(1, 1);
+            break;
+        default:
+            arg[1] = '/';
+            break;
+    }
+
+    arg.insert(arg.begin(), '/');
+    if (have_cygdrive()) {
+        arg.insert(0, "/cygdrive");
+    }
+    std::replace(arg.begin(), arg.end(), '\\', '/');
+
+    return {arg, caps};
+}
+
+std::string
+path_transcoder::to_native(std::string arg)
+{
+    if (!this->pt_root_name_capitalized) {
+        return arg;
+    }
+
+    static const auto CYGDRIVE = "/cygdrive"_frag;
+
+    if (startswith(arg, CYGDRIVE.data())) {
+        arg.erase(0, CYGDRIVE.length());
+    }
+
+    if (arg[0] == '/' && !startswith(arg, "//")) {
+        arg.erase(0, 1);
+        if (cget(arg, 1).value_or('\0') == '/') {
+            arg.insert(1, ":");
+        }
+    }
+    if (this->pt_root_name_capitalized.value()) {
+        arg[0] = toupper(arg[0]);
+    }
+    std::replace(arg.begin(), arg.end(), '/', '\\');
+
+    return arg;
+}
+
+std::string
+path_transcoder::to_shell_arg(std::string arg)
+{
+    static const auto plain_path_re
+        = lnav::pcre2pp::code::from_const(R"(^[\w/]+$)");
+
+    if (plain_path_re.find_in(arg).ignore_error()) {
+        return arg;
+    }
+
+    // XXX
+    return fmt::format(FMT_STRING("'{}'"), arg);
 }
 
 std::pair<std::string, file_location_t>
@@ -377,11 +546,9 @@ file_lock::file_lock(const std::filesystem::path& archive_path)
     }
     this->lh_fd = open_res.unwrap();
 }
-
 }  // namespace lnav::filesystem
 
 namespace fmt {
-
 auto
 formatter<std::filesystem::path>::format(const std::filesystem::path& p,
                                          format_context& ctx)

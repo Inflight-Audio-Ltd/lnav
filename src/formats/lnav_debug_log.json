@@ -8,6 +8,9 @@
                 "pattern": "^(?<timestamp>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}(-|\\+)\\d{2}:\\d{2}) (?<level>\\w) (?<thread>\\w+) (?<srcfile>[^:]+):(?<srcline>\\d+) (?<body>.*)"
             }
         },
+        "src-file-field": "srcfile",
+        "src-line-field": "srcline",
+        "thread-id-field": "thread",
         "value": {
             "srcfile": {
                 "kind": "string",

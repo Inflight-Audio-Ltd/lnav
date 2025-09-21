@@ -47,6 +47,7 @@
 #include "md2attr_line.hh"
 #include "msg.text.hh"
 #include "pretty_printer.hh"
+#include "readline_highlighters.hh"
 #include "scn/scan.h"
 #include "sql_util.hh"
 #include "sqlitepp.hh"
@@ -747,12 +748,15 @@ textfile_sub_source::rescan_files(textfile_sub_source::scan_callback& callback,
         return retval;
     }
 
+    auto last_aborted = std::exchange(this->tss_last_scan_aborted, false);
+
     std::vector<std::shared_ptr<logfile>> closed_files;
     for (iter = this->tss_files.begin(); iter != this->tss_files.end();) {
         if (deadline && files_scanned > 0 && ui_clock::now() > deadline.value())
         {
             log_info("rescan_files() deadline reached, breaking...");
             retval.rr_scan_completed = false;
+            this->tss_last_scan_aborted = true;
             break;
         }
 
@@ -766,7 +770,8 @@ textfile_sub_source::rescan_files(textfile_sub_source::scan_callback& callback,
             continue;
         }
 
-        if (!this->tss_completed_last_scan && lf->size() > 0) {
+        if (last_aborted && lf->size() > 0) {
+            retval.rr_scan_completed = false;
             ++iter;
             continue;
         }
@@ -1098,7 +1103,6 @@ textfile_sub_source::rescan_files(textfile_sub_source::scan_callback& callback,
     if (retval.rr_new_data) {
         this->tss_view->search_new_data();
     }
-    this->tss_completed_last_scan = retval.rr_scan_completed;
 
     return retval;
 }
@@ -1595,6 +1599,50 @@ textfile_header_overlay::list_static_overlay(const listview_curses& lv,
         }
     } else if (curr_file->size() == 0) {
         lines = lnav::messages::view::empty_file();
+    } else if (this->tho_src->text_line_count() == 0) {
+        hasher h;
+        this->tho_src->update_filter_hash_state(h);
+        auto curr_state = h.to_array();
+        if (this->tho_static_lines.empty()
+            || curr_state != this->tho_filter_state)
+        {
+            auto msg = lnav::console::user_message::info(
+                "All log messages are currently hidden");
+            auto min_time = this->tho_src->get_min_row_time();
+            if (min_time) {
+                msg.with_note(attr_line_t("Logs before ")
+                                  .append_quoted(
+                                      lnav::to_rfc3339_string(min_time.value()))
+                                  .append(" are not being shown"));
+            }
+            auto max_time = this->tho_src->get_max_row_time();
+            if (max_time) {
+                msg.with_note(attr_line_t("Logs after ")
+                                  .append_quoted(
+                                      lnav::to_rfc3339_string(max_time.value()))
+                                  .append(" are not being shown"));
+            }
+            auto& fs = this->tho_src->get_filters();
+            for (const auto& filt : fs) {
+                auto hits
+                    = this->tho_src->get_filtered_count_for(filt->get_index());
+                if (filt->get_type() == text_filter::EXCLUDE && hits == 0) {
+                    continue;
+                }
+                auto cmd = attr_line_t(":" + filt->to_command());
+                readline_command_highlighter(cmd, std::nullopt);
+                msg.with_note(
+                    attr_line_t("Filter ")
+                        .append_quoted(cmd)
+                        .append(" matched ")
+                        .append(lnav::roles::number(fmt::to_string(hits)))
+                        .append(" message(s) "));
+            }
+            this->tho_static_lines = msg.to_attr_line().split_lines();
+            this->tho_filter_state = curr_state;
+        }
+
+        lines = &this->tho_static_lines;
     }
 
     if (lines != nullptr && y < (ssize_t) lines->size()) {

@@ -36,7 +36,6 @@
 
 #include "view_curses.hh"
 
-#include <curses.h>
 #include <zlib.h>
 
 #include "base/ansi_scrubber.hh"
@@ -49,6 +48,8 @@
 #include "config.h"
 #include "lnav_config.hh"
 #include "shlex.hh"
+#include "terminfo-files.h"
+#include "terminfo/terminfo.h"
 #include "uniwidth.h"
 #include "xterm_mouse.hh"
 
@@ -507,13 +508,15 @@ view_curses::mvwattrline(ncplane* window,
                 }
             } else if (iter->sa_type == &VC_BLOCK_ELEM) {
                 auto be = iter->sa_value.get<block_elem_t>();
-                ncplane_putwc_yx(window, y, x + attr_range.lr_start, be.value);
+                ncplane_pututf32_yx(
+                    window, y, x + attr_range.lr_start, be.value);
                 attrs = vc.attrs_for_role(be.role);
             } else if (iter->sa_type == &VC_ICON) {
                 auto ic = iter->sa_value.get<ui_icon_t>();
                 auto be = vc.wchar_for_icon(ic);
 
-                ncplane_putwc_yx(window, y, x + attr_range.lr_start, be.value);
+                ncplane_pututf32_yx(
+                    window, y, x + attr_range.lr_start, be.value);
                 attrs = vc.attrs_for_role(be.role);
                 // clear the BG color, it interferes with the cursor BG
                 attrs.ta_bg_color = styling::color_unit::EMPTY;
@@ -989,7 +992,7 @@ view_colors::init_roles(const lnav_theme& lt,
                         break;
                 }
                 this->vc_icons[icon_index]
-                    = block_elem_t{(wchar_t) read_res.unwrap(), icon_role};
+                    = block_elem_t{(char32_t) read_res.unwrap(), icon_role};
             }
         }
         icon_index += 1;
@@ -1358,6 +1361,8 @@ view_colors::init_roles(const lnav_theme& lt,
             = this->to_attrs(lt, bar_sc, reporter);
     }
 
+    this->get_role_attrs(role_t::VCR_OBJECT_KEY)
+        = this->to_attrs(lt, lt.lt_style_object_key, reporter);
     this->get_role_attrs(role_t::VCR_KEYWORD)
         = this->to_attrs(lt, lt.lt_style_keyword, reporter);
     this->get_role_attrs(role_t::VCR_STRING)
@@ -1555,4 +1560,28 @@ screen_curses::screen_curses(screen_curses&& other) noexcept
     : sc_termios(other.sc_termios),
       sc_notcurses(std::exchange(other.sc_notcurses, nullptr))
 {
+}
+
+extern "C"
+{
+Terminfo*
+terminfo_load_from_internal(const char* term_name)
+{
+    log_debug("checking for internal terminfo for: %s", term_name);
+    for (const auto& tf : lnav_terminfo_files) {
+        if (strcmp(tf.get_name(), term_name) != 0) {
+            continue;
+        }
+        log_info("  found internal terminfo!");
+        auto sfp = tf.to_string_fragment_producer();
+        auto content = sfp->to_string();
+        auto* retval = terminfo_parse(content.c_str(), content.size());
+        if (retval != nullptr) {
+            return retval;
+        }
+        log_error("  failed to load internal terminfo");
+    }
+
+    return nullptr;
+}
 }

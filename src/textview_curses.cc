@@ -181,13 +181,16 @@ text_accel_source::get_time_offset_for_line(textview_curses& tc, vis_line_t vl)
     return humanize::time::duration::from_tv(diff_tv).to_string();
 }
 
-const bookmark_type_t textview_curses::BM_ERRORS("error");
-const bookmark_type_t textview_curses::BM_WARNINGS("warning");
-const bookmark_type_t textview_curses::BM_USER("user");
-const bookmark_type_t textview_curses::BM_USER_EXPR("user-expr");
-const bookmark_type_t textview_curses::BM_SEARCH("search");
-const bookmark_type_t textview_curses::BM_META("meta");
-const bookmark_type_t textview_curses::BM_PARTITION("partition");
+const DIST_SLICE(bm_types) bookmark_type_t textview_curses::BM_ERRORS("error");
+const DIST_SLICE(bm_types)
+    bookmark_type_t textview_curses::BM_WARNINGS("warning");
+const DIST_SLICE(bm_types) bookmark_type_t textview_curses::BM_USER("user");
+const DIST_SLICE(bm_types)
+    bookmark_type_t textview_curses::BM_USER_EXPR("user-expr");
+const DIST_SLICE(bm_types) bookmark_type_t textview_curses::BM_SEARCH("search");
+const DIST_SLICE(bm_types) bookmark_type_t textview_curses::BM_META("meta");
+const DIST_SLICE(bm_types)
+    bookmark_type_t textview_curses::BM_PARTITION("partition");
 
 textview_curses::textview_curses()
     : lnav_config_listener(__FILE__), tc_search_action(noop_func{})
@@ -421,9 +424,6 @@ textview_curses::listview_value_for_rows(const listview_curses& lv,
 bool
 textview_curses::handle_mouse(mouse_event& me)
 {
-    unsigned long width;
-    vis_line_t height;
-
     if (!this->vc_visible || this->lv_height == 0) {
         return false;
     }
@@ -435,7 +435,7 @@ textview_curses::handle_mouse(mouse_event& me)
     auto mouse_line = (me.me_y < 0 || me.me_y >= this->lv_display_lines.size())
         ? empty_space{}
         : this->lv_display_lines[me.me_y];
-    this->get_dimensions(height, width);
+    auto [height, width] = this->get_dimensions();
 
     if (!mouse_line.is<overlay_menu>()
         && (me.me_button != mouse_button_t::BUTTON_LEFT
@@ -474,6 +474,7 @@ textview_curses::handle_mouse(mouse_event& me)
 
     switch (me.me_state) {
         case mouse_button_state_t::BUTTON_STATE_PRESSED: {
+            this->tc_selection_at_press = this->get_selection();
             this->tc_press_line = mouse_line;
             this->tc_press_left = this->lv_left + me.me_press_x;
             if (!this->lv_selectable) {
@@ -508,6 +509,7 @@ textview_curses::handle_mouse(mouse_event& me)
                 [](const overlay_menu& om) {},
                 [](const static_overlay_content& soc) {},
                 [this](const overlay_content& oc) {
+                    this->set_selection(oc.oc_main_line);
                     this->set_overlay_selection(oc.oc_line);
                 },
                 [](const empty_space& es) {});
@@ -686,9 +688,16 @@ textview_curses::handle_mouse(mouse_event& me)
                 }
             }
             this->tc_text_selection_active = false;
-            if (me.is_click_in(mouse_button_t::BUTTON_RIGHT, 0, INT_MAX)) {
+            if (this->tc_press_line.is<main_content>()
+                && mouse_line.is<main_content>()
+                && me.is_click_in(mouse_button_t::BUTTON_RIGHT, 0, INT_MAX))
+            {
                 auto* lov = this->get_overlay_source();
-                if (lov != nullptr) {
+                if (lov != nullptr
+                    && (!lov->get_show_details_in_overlay()
+                        || this->tc_selection_at_press
+                            == this->get_selection()))
+                {
                     this->set_show_details_in_overlay(
                         !lov->get_show_details_in_overlay());
                 }
@@ -832,8 +841,8 @@ textview_curses::apply_highlights(attr_line_t& al,
         // highlights should apply only to the line itself and not any of
         // the surrounding decorations that are added (for example, the file
         // lines that are inserted at the beginning of the log view).
-        int start_pos = internal_hl ? body.lr_start : orig_line.lr_start;
-        tc_highlight.second.annotate(al, start_pos);
+        auto lr = internal_hl ? body : orig_line;
+        tc_highlight.second.annotate(al, lr);
     }
 }
 
@@ -1165,6 +1174,16 @@ textview_curses::grep_value_for_line(vis_line_t line, std::string& value_out)
 }
 
 void
+textview_curses::update_hash_state(hasher& h) const
+{
+    listview_curses::update_hash_state(h);
+
+    if (this->tc_sub_source != nullptr) {
+        this->tc_sub_source->update_filter_hash_state(h);
+    }
+}
+
+void
 text_sub_source::scroll_invoked(textview_curses* tc)
 {
     auto* ttt = dynamic_cast<text_time_translator*>(this);
@@ -1263,6 +1282,7 @@ filter_stack::delete_filter(const std::string& id)
     }
     if (iter != this->fs_filters.end()) {
         this->fs_filters.erase(iter);
+        this->fs_generation += 1;
         return true;
     }
 
@@ -1328,6 +1348,7 @@ void
 filter_stack::add_filter(const std::shared_ptr<text_filter>& filter)
 {
     this->fs_filters.push_back(filter);
+    this->fs_generation += 1;
 }
 
 void
@@ -1369,6 +1390,32 @@ vis_location_history::loc_history_forward(vis_line_t current_top)
     this->lh_history_position -= 1;
 
     return this->current_position();
+}
+
+void
+text_sub_source::update_filter_hash_state(hasher& h) const
+{
+    h.update(this->tss_filters.fs_generation);
+
+    const auto* ttt = dynamic_cast<const text_time_translator*>(this);
+    if (ttt != nullptr) {
+        auto min_time = ttt->get_min_row_time();
+        if (min_time) {
+            h.update(min_time->tv_sec);
+            h.update(min_time->tv_usec);
+        } else {
+            h.update(0);
+            h.update(0);
+        }
+        auto max_time = ttt->get_max_row_time();
+        if (max_time) {
+            h.update(max_time->tv_sec);
+            h.update(max_time->tv_usec);
+        } else {
+            h.update(0);
+            h.update(0);
+        }
+    }
 }
 
 void

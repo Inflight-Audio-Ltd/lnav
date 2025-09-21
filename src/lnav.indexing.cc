@@ -34,6 +34,7 @@
 #include "bound_tags.hh"
 #include "lnav.events.hh"
 #include "lnav.hh"
+#include "lnav_commands.hh"
 #include "service_tags.hh"
 #include "session_data.hh"
 #include "sql_util.hh"
@@ -47,8 +48,6 @@ using namespace lnav::roles::literals;
  */
 class loading_observer : public logfile_observer {
 public:
-    loading_observer() : lo_last_offset(0) {}
-
     lnav::progress_result_t logfile_indexing(const logfile* lf,
                                              file_off_t off,
                                              file_ssize_t total) override
@@ -90,7 +89,7 @@ public:
         return retval;
     }
 
-    off_t lo_last_offset;
+    off_t lo_last_offset{0};
 };
 
 lnav::progress_result_t
@@ -119,9 +118,9 @@ do_observer_update(const logfile* lf)
 void
 rebuild_hist()
 {
-    logfile_sub_source& lss = lnav_data.ld_log_source;
-    hist_source2& hs = lnav_data.ld_hist_source2;
-    int zoom = lnav_data.ld_zoom_level;
+    auto& lss = lnav_data.ld_log_source;
+    auto& hs = lnav_data.ld_hist_source2;
+    const auto zoom = lnav_data.ld_zoom_level;
 
     hs.set_time_slice(ZOOM_LEVELS[zoom]);
     lss.reload_index_delegate();
@@ -338,7 +337,7 @@ rebuild_indexes(std::optional<ui_clock::time_point> deadline)
     auto result = lss.rebuild_index(deadline);
     if (result != logfile_sub_source::rebuild_result::rr_no_change) {
         size_t new_count = lss.text_line_count();
-        bool force
+        auto force
             = result == logfile_sub_source::rebuild_result::rr_full_rebuild;
 
         if ((!scroll_downs[LNV_LOG]
@@ -348,41 +347,57 @@ rebuild_indexes(std::optional<ui_clock::time_point> deadline)
             scroll_downs[LNV_LOG] = false;
         }
 
-        {
+        if (retval.rir_completed && !retval.rir_rescan_needed) {
             std::unordered_map<std::string, std::list<std::shared_ptr<logfile>>>
                 id_to_files;
-            bool reload = false;
+            auto reload = false;
 
             for (const auto& lf : lnav_data.ld_active_files.fc_files) {
+                if (lf->get_format_ptr() == nullptr) {
+                    continue;
+                }
                 id_to_files[lf->get_content_id()].push_back(lf);
             }
 
-            for (auto& pair : id_to_files) {
-                if (pair.second.size() == 1) {
+            for (auto& [name, lf] : id_to_files) {
+                if (lf.size() == 1) {
                     continue;
                 }
 
-                pair.second.sort([](const auto& left, const auto& right) {
-                    return right->get_stat().st_size < left->get_stat().st_size;
+                lf.sort([](const auto& left, const auto& right) {
+                    const auto& lst = left->get_stat();
+                    const auto& rst = right->get_stat();
+                    return rst.st_size < lst.st_size
+                        || (rst.st_size == lst.st_size
+                            && rst.st_mtime < lst.st_mtime);
                 });
 
-                auto dupe_name = pair.second.front()->get_unique_path();
-                pair.second.pop_front();
-                for_each(pair.second.begin(),
-                         pair.second.end(),
-                         [&dupe_name](auto& lf) {
-                             if (lf->mark_as_duplicate(dupe_name)) {
-                                 log_info("Hiding duplicate file: %s",
-                                          lf->get_filename().c_str());
-                                 lnav_data.ld_log_source.find_data(lf) |
-                                     [](auto ld) { ld->set_visibility(false); };
-                             }
-                         });
-                reload = true;
+                const auto& dupe_name = lf.front()->get_unique_path();
+                log_info(
+                    "Keeping duplicated file: %s; size=%lld; mtime=%d; path=%s",
+                    lf.front()->get_content_id().c_str(),
+                    lf.front()->get_stat().st_size,
+                    lf.front()->get_stat().st_mtime,
+                    lf.front()->get_filename_as_string().c_str());
+                lf.pop_front();
+                std::for_each(
+                    lf.begin(), lf.end(), [&dupe_name, &reload](auto& lf) {
+                        if (lf->mark_as_duplicate(dupe_name)) {
+                            log_info(
+                                "  Hiding copy: size=%lld; mtime=%d; path=%s",
+                                lf->get_stat().st_size,
+                                lf->get_stat().st_mtime,
+                                lf->get_filename_as_string().c_str());
+                            lnav_data.ld_log_source.find_data(lf) |
+                                [](auto ld) { ld->set_visibility(false); };
+                            reload = true;
+                        }
+                    });
             }
 
             if (reload) {
-                log_trace("text filters changed");
+                log_trace(
+                    "file visibility changed, calling text_filters_changed");
                 lss.text_filters_changed();
             }
         }
@@ -419,7 +434,9 @@ rebuild_indexes(std::optional<ui_clock::time_point> deadline)
         }
 
         auto* tss = tc->get_sub_source();
-        lnav_data.ld_filter_status_source.update_filtered(tss);
+        if (lnav_data.ld_filter_status_source.update_filtered(tss)) {
+            lnav_data.ld_status[LNS_FILTER].set_needs_update();
+        }
         if (retval.rir_changes > 0) {
             lnav_data.ld_scroll_broadcaster(tc);
         }

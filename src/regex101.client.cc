@@ -43,9 +43,9 @@ namespace regex101::client {
 static const typed_json_path_container<entry>&
 get_entry_handlers()
 {
-    static const json_path_handler_base::enum_value_t CRITERIA_ENUM[] = {
-        {"DOES_MATCH", unit_test::criteria::DOES_MATCH},
-        {"DOES_NOT_MATCH", unit_test::criteria::DOES_NOT_MATCH},
+    static constexpr json_path_handler_base::enum_value_t CRITERIA_ENUM[] = {
+        {"DOES_MATCH"_frag, unit_test::criteria::DOES_MATCH},
+        {"DOES_NOT_MATCH"_frag, unit_test::criteria::DOES_NOT_MATCH},
 
         json_path_handler_base::ENUM_TERMINATOR,
     };

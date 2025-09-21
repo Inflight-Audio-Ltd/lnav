@@ -99,8 +99,8 @@ the basics of operation:
 
 [1mInstallation[0m
 
-]8;;https://github.com/tstack/lnav/releases/latest#release-artifacts\[4mDownload a statically-linked binary for Linux/MacOS from the release[0m]8;;\
-]8;;https://github.com/tstack/lnav/releases/latest#release-artifacts\[4mpage[0m]8;;\¹
+]8;;https://github.com/tstack/lnav/releases/latest#release-artifacts\[4mDownload a statically-linked binary for Linux/MacOS/Windows from the[0m]8;;\
+]8;;https://github.com/tstack/lnav/releases/latest#release-artifacts\[4mrelease page[0m]8;;\¹
 
  [34m▌[0m[1] - https://github.com/tstack/lnav/releases/latest#release-artifacts 
 
@@ -211,7 +211,6 @@ The following software packages are required to build lnav:
    v2 (PCRE2) library.
  [33m•[0m sqlite       - The SQLite database engine.  Version
    3.9.0 or higher is required.
- [33m•[0m ncurses      - The ncurses text UI library.
  [33m•[0m zlib         - The zlib compression library.
  [33m•[0m bz2          - The bzip2 compression library.
  [33m•[0m libcurl      - The cURL library for downloading files
@@ -243,3 +242,15 @@ command-line. If you're familiar with the SumoLogic query language,
 you might find this tool more comfortable to work with.
 
  [34m▌[0m[1] - https://github.com/rcoh/angle-grinder 
+
+[1mCode Signing Policy[0m
+
+Free code signing provided by ]8;;https://about.signpath.io/\[4mSignPath.io[0m]8;;\¹, certificate by ]8;;https://signpath.org/\[4mSignPath[0m]8;;\
+]8;;https://signpath.org/\[4mFoundation[0m]8;;\².
+
+ [34m▌[0m[1] - https://about.signpath.io/ 
+ [34m▌[0m[2] - https://signpath.org/      
+
+This program will not transfer any information to other networked
+systems unless specifically requested by the user or the person
+installing or operating it.

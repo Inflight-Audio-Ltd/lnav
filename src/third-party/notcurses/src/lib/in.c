@@ -354,7 +354,7 @@ prep_special_keys(inputctx* ictx){
     { .tinfo = NULL,    .key = 0, }
   }, *k;
   for(k = keys ; k->tinfo ; ++k){
-    char* seq = tigetstr(k->tinfo);
+    char* seq = terminfo_get_string_by_name(notcurses_terminfo, k->tinfo);
     if(seq == NULL || seq == (char*)-1){
       loginfo("no terminfo declaration for %s", k->tinfo);
       continue;
@@ -371,7 +371,7 @@ prep_special_keys(inputctx* ictx){
     }
     logdebug("support for terminfo's %s: %s", k->tinfo, seq);
   }
-  const char* bs = tigetstr("kbs");
+  const char* bs = terminfo_get_string_by_name(notcurses_terminfo, "kbs");
   if(bs == NULL){
     logwarn("no backspace key was defined");
   }else{
@@ -3082,23 +3082,24 @@ int notcurses_linesigs_enable(notcurses* n){
 
 struct initial_responses* inputlayer_get_responses(inputctx* ictx){
   struct initial_responses* iresp;
-      struct timeval wait_start_tv, curr_tv, diff_tv;
-      loginfo("inputlayer_get_resp wait");
-      gettimeofday(&wait_start_tv, NULL);
-      struct timespec ts = {wait_start_tv.tv_sec + 5, 0};
+  struct timeval wait_start_tv, curr_tv, diff_tv;
+  loginfo("inputlayer_get_resp wait");
+  gettimeofday(&wait_start_tv, NULL);
+  struct timespec ts = {wait_start_tv.tv_sec + 5, 0};
   pthread_mutex_lock(&ictx->ilock);
   while(ictx->initdata || !ictx->initdata_complete){
-    pthread_cond_timedwait(&ictx->icond, &ictx->ilock, &ts);
+      pthread_cond_timedwait(&ictx->icond, &ictx->ilock, &ts);
       gettimeofday(&curr_tv, NULL);
       timersub(&curr_tv, &wait_start_tv, &diff_tv);
       if (diff_tv.tv_sec > 5) {
           logpanic("timedout waiting for initial response");
+          pthread_mutex_unlock(&ictx->ilock);
           return NULL;
       }
   }
   iresp = ictx->initdata_complete;
   ictx->initdata_complete = NULL;
-      loginfo("inputlayer_get_resp got %p", iresp);
+  loginfo("inputlayer_get_resp got %p", iresp);
   pthread_mutex_unlock(&ictx->ilock);
   if(ictx->failed){
     logpanic("aborting after automaton construction failure");

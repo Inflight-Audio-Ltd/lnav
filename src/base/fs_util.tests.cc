@@ -35,6 +35,40 @@
 #include "config.h"
 #include "doctest/doctest.h"
 
+TEST_CASE("fs_util::to_posix_path")
+{
+    auto pt = lnav::filesystem::path_transcoder::from("c:\\foo\\bar");
+    CHECK("/c/foo/bar" == pt.pt_path);
+    CHECK_FALSE(pt.pt_root_name_capitalized.value());
+
+    pt = lnav::filesystem::path_transcoder::from("C:\\foo\\bar");
+    CHECK("/c/foo/bar" == pt.pt_path);
+    CHECK(pt.pt_root_name_capitalized.value());
+
+    pt = lnav::filesystem::path_transcoder::from("c:");
+    CHECK("/c/" == pt.pt_path);
+
+    pt = lnav::filesystem::path_transcoder::from("c:\\");
+    CHECK("/c/" == pt.pt_path);
+
+    // XXX what should this be?
+    pt = lnav::filesystem::path_transcoder::from("c:foo\\bar");
+    CHECK("/c/foo/bar" == pt.pt_path);
+
+    pt = lnav::filesystem::path_transcoder::from("");
+    CHECK("" == pt.pt_path);
+}
+
+#if defined(__MSYS__)
+TEST_CASE("fs_util::escape_glob_for_win")
+{
+    CHECK(R"(c:/abc/def/*.log)"
+          == lnav::filesystem::escape_glob_for_win(R"(c:\abc\def\*.log)"));
+    CHECK(R"(c:/abc/def/\*.log)"
+          == lnav::filesystem::escape_glob_for_win(R"(c:\abc\def\^*.log)"));
+}
+#endif
+
 TEST_CASE("fs_util::build_path")
 {
     auto* old_path = getenv("PATH");

@@ -27,8 +27,6 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <regex>
-
 #include <fnmatch.h>
 #include <glob.h>
 
@@ -75,9 +73,9 @@ csv_needs_quoting(const std::string& str)
 static std::string
 csv_quote_string(const std::string& str)
 {
-    static const std::regex csv_column_quoter("\"");
+    static const auto csv_column_quoter = lnav::pcre2pp::code::from_const("\"");
 
-    std::string retval = std::regex_replace(str, csv_column_quoter, "\"\"");
+    auto retval = csv_column_quoter.replace(str, "\"\"");
 
     retval.insert(0, 1, '\"');
     retval.append(1, '\"');
@@ -335,6 +333,8 @@ com_save_to(exec_context& ec,
     if (args[0] == "write-csv-to") {
         bool first = true;
 
+        ec.set_output_format(text_format_t::TF_CSV);
+
         for (auto& dls_header : dls.dls_headers) {
             if (!first) {
                 fprintf(outfile, ",");
@@ -503,6 +503,8 @@ com_save_to(exec_context& ec,
     } else if (args[0] == "write-json-to") {
         yajlpp_gen gen;
 
+        ec.set_output_format(text_format_t::TF_JSON);
+
         yajl_gen_config(gen, yajl_gen_beautify, 1);
         yajl_gen_config(gen, yajl_gen_print_callback, yajl_writer, outfile);
 
@@ -526,6 +528,8 @@ com_save_to(exec_context& ec,
             }
         }
     } else if (args[0] == "write-jsonlines-to") {
+        ec.set_output_format(text_format_t::TF_JSON);
+
         yajlpp_gen gen;
 
         yajl_gen_config(gen, yajl_gen_beautify, 0);
@@ -835,11 +839,8 @@ com_open(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
         return ec.make_error("expecting file name to open");
     }
 
-    std::vector<std::string> word_exp;
-    std::string pat;
     file_collection fc;
-
-    pat = trim(remaining_args(cmdline, args));
+    auto pat = trim(remaining_args(cmdline, args));
 
     shlex lexer(pat);
     auto split_args_res = lexer.split(ec.create_resolver());
@@ -868,7 +869,14 @@ com_open(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
     }
 
     for (auto fn : split_args) {
+        std::replace(fn.begin(), fn.end(), '\\', '/');
+        auto fn_path = std::filesystem::path{fn};
         auto file_loc = file_location_t{file_location_tail{}};
+
+        if (fn_path.has_root_name() && fn_path.root_directory().empty()) {
+            return Err(
+                lnav::console::user_message::error("incomplete root name"));
+        }
 
         if (access(fn.c_str(), R_OK) != 0) {
             auto pair = lnav::filesystem::split_file_location(fn);
@@ -940,7 +948,7 @@ com_open(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
             }
 #endif
 
-            if (is_url(fn.c_str())) {
+            if (lnav::filesystem::is_url(fn)) {
 #ifndef HAVE_LIBCURL
                 retval = "error: lnav was not compiled with libcurl";
 #else
@@ -1187,8 +1195,15 @@ com_open(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
             } else if (lnav::filesystem::is_glob(fn_str)) {
                 static_root_mem<glob_t, globfree> gl;
 
-                if (glob(fn_str.c_str(), GLOB_NOCHECK, nullptr, gl.inout())
-                    == 0)
+                fn_str = lnav::filesystem::escape_glob_for_win(fn_str);
+                auto fn = std::filesystem::path(fn_str);
+                if (fn.has_root_name() && fn.root_directory().empty()) {
+                    log_debug("ignoring incomplete root name: %s", fn.c_str());
+                } else if (glob(fn_str.c_str(),
+                                GLOB_NOCHECK,
+                                nullptr,
+                                gl.inout())
+                           == 0)
                 {
                     attr_line_t al;
 
@@ -1204,7 +1219,7 @@ com_open(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
                     }
                     lnav_data.ld_preview_status_source[0]
                         .get_description()
-                        .set_value("The following files will be loaded:");
+                        .set_value("The following files will be loaded:"_frag);
                     lnav_data.ld_status[LNS_PREVIEW0].set_needs_update();
                     lnav_data.ld_preview_view[0].set_sub_source(
                         &lnav_data.ld_preview_source[0]);
@@ -1367,11 +1382,11 @@ com_xopen(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
         return ec.make_error("expecting file name to open");
     }
 
-    std::vector<std::string> word_exp;
-    std::string pat;
-    file_collection fc;
+    if (ec.ec_dry_run) {
+        return Ok(retval);
+    }
 
-    pat = trim(remaining_args(cmdline, args));
+    auto pat = trim(remaining_args(cmdline, args));
 
     shlex lexer(pat);
     auto split_args_res = lexer.split(ec.create_resolver());
@@ -1389,7 +1404,7 @@ com_xopen(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
 
     auto split_args = split_args_res.unwrap()
         | lnav::itertools::map([](const auto& elem) { return elem.se_value; });
-    for (auto fn : split_args) {
+    for (const auto& fn : split_args) {
         auto open_res = lnav::external_opener::for_href(fn);
         if (open_res.isErr()) {
             auto um = lnav::console::user_message::error(
@@ -1502,7 +1517,7 @@ com_close(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
                 const auto& fn = fn_v[lpc];
                 const auto& actual_path = actual_path_v[lpc];
 
-                if (is_url(fn.c_str())) {
+                if (lnav::filesystem::is_url(fn)) {
                     isc::to<curl_looper&, services::curl_streamer_t>().send(
                         [fn](auto& clooper) { clooper.close_request(fn); });
                 }
@@ -1551,7 +1566,8 @@ com_pipe_to(exec_context& ec,
         log_data_helper ldh(lnav_data.ld_log_source);
         char tmp_str[64];
 
-        ldh.parse_line(ec.ec_top_line, true);
+        ldh.load_line(ec.ec_top_line, true);
+        ldh.parse_body();
         auto format = ldh.ldh_file->get_format();
         auto source_path = format->get_source_path();
         path_v.insert(path_v.end(), source_path.begin(), source_path.end());
@@ -1560,7 +1576,7 @@ com_pipe_to(exec_context& ec,
         sql_strftime(tmp_str, sizeof(tmp_str), ldh.ldh_line->get_timeval());
         extra_env["log_time"] = tmp_str;
         extra_env["log_path"] = ldh.ldh_file->get_filename();
-        extra_env["log_level"] = ldh.ldh_line->get_level_name();
+        extra_env["log_level"] = ldh.ldh_line->get_level_name().to_string();
         if (ldh.ldh_line_values.lvv_opid_value) {
             extra_env["log_opid"] = ldh.ldh_line_values.lvv_opid_value.value();
         }
@@ -1881,7 +1897,7 @@ static readline_context::command_t IO_COMMANDS[] = {
             .with_parameter(
                 help_text("--view", "The view to use as the source of data")
                     .optional()
-                    .with_enum_values({"log", "db"}))
+                    .with_enum_values({"log"_frag, "db"_frag}))
             .with_parameter(
                 help_text("--anonymize", "Anonymize the lines").flag())
             .with_parameter(

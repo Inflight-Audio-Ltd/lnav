@@ -80,6 +80,12 @@ namespace injector {
 
 template<>
 void
+force_linking(last_relative_time_tag anno)
+{
+}
+
+template<>
+void
 force_linking(lnav_flags_tag anno)
 {
 }

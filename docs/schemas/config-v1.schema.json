@@ -279,6 +279,21 @@
                                             "examples": [
                                                 "code -"
                                             ]
+                                        },
+                                        "config-dir": {
+                                            "title": "/tuning/external-editor/impls/<editor_impl_name>/config-dir",
+                                            "description": "The name of the directory where editor configuration is stored",
+                                            "type": "string",
+                                            "examples": [
+                                                ".idea"
+                                            ]
+                                        },
+                                        "prefers": {
+                                            "title": "/tuning/external-editor/impls/<editor_impl_name>/prefers",
+                                            "type": "string",
+                                            "examples": [
+                                                "^.*(?:\\.cpp)$"
+                                            ]
                                         }
                                     },
                                     "additionalProperties": false
@@ -707,6 +722,11 @@
                                         "code-border": {
                                             "description": "Styling for quoted-code borders",
                                             "title": "/ui/theme-defs/<theme_name>/syntax-styles/code-border",
+                                            "$ref": "#/definitions/style"
+                                        },
+                                        "object-key": {
+                                            "description": "Styling for a key in an object",
+                                            "title": "/ui/theme-defs/<theme_name>/syntax-styles/object-key",
                                             "$ref": "#/definitions/style"
                                         },
                                         "keyword": {

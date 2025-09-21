@@ -48,7 +48,6 @@
 #include "md2attr_line.hh"
 #include "md4cpp.hh"
 #include "pretty_printer.hh"
-#include "shlex.hh"
 #include "sql_help.hh"
 #include "sql_util.hh"
 #include "static_file_vtab.hh"
@@ -63,16 +62,16 @@
 using namespace std::chrono_literals;
 using namespace lnav::roles::literals;
 
-constexpr std::array<const char*, LNV__MAX> lnav_view_strings = {
-    "log",
-    "text",
-    "help",
-    "histogram",
-    "db",
-    "schema",
-    "pretty",
-    "spectro",
-    "timeline",
+constexpr std::array<string_fragment, LNV__MAX> lnav_view_strings = {
+    "log"_frag,
+    "text"_frag,
+    "help"_frag,
+    "histogram"_frag,
+    "db"_frag,
+    "schema"_frag,
+    "pretty"_frag,
+    "spectro"_frag,
+    "timeline"_frag,
 };
 
 const char* const lnav_view_titles[LNV__MAX] = {
@@ -115,12 +114,11 @@ view_from_string(const char* name)
         return std::nullopt;
     }
 
-    auto* view_name_iter
+    auto name_sf = string_fragment::from_c_str(name);
+    auto view_name_iter
         = std::find_if(std::begin(lnav_view_strings),
                        std::end(lnav_view_strings),
-                       [&](const char* v) {
-                           return v != nullptr && strcasecmp(v, name) == 0;
-                       });
+                       [&](const auto& v) { return name_sf.iequal(v); });
 
     if (view_name_iter == std::end(lnav_view_strings)) {
         return std::nullopt;
@@ -454,6 +452,7 @@ open_pretty_view()
                 // TODO: dump more details of the line in the output.
                 pp.append_to(pretty_al);
             } else {
+                log_info("skipping pretty-print of log message with no body");
                 pretty_al = orig_al;
             }
 
@@ -593,15 +592,8 @@ build_all_help_text()
     }
 
     auto help_md_str = help_md.to_string_fragment_producer()->to_string();
-    shlex lexer(help_md_str);
-    std::string sub_help_text;
-
-    lexer.with_ignore_quotes(true).eval(
-        sub_help_text,
-        scoped_resolver{&lnav_data.ld_exec_context.ec_global_vars});
-
     md2attr_line mdal;
-    auto parse_res = md4cpp::parse(sub_help_text, mdal);
+    auto parse_res = md4cpp::parse(help_md_str, mdal);
     attr_line_t all_help_text = parse_res.unwrap();
 
     std::map<std::string, const help_text*> sql_funcs;
@@ -702,7 +694,7 @@ handle_winch(screen_curses* sc)
 void
 layout_views()
 {
-    static constexpr auto FILES_FOCUSED_WIDTH = 40U;
+    static constexpr auto FILES_FOCUSED_WIDTH = 48U;
     static constexpr auto FILES_BLURRED_WIDTH = 20U;
 
     static auto* breadcrumb_view = injector::get<breadcrumb_curses*>();
@@ -803,6 +795,10 @@ layout_views()
             break;
     }
 
+    if (files_width > width) {
+        files_width = width / 2;
+    }
+
     bool breadcrumb_open = (lnav_data.ld_mode == ln_mode_t::BREADCRUMBS);
 
     auto prompt_height
@@ -897,18 +893,26 @@ layout_views()
 
     vis = bottom.try_consume(filter_height + (config_panel_open ? 1 : 0)
                              + (filters_supported ? 1 : 0));
-    lnav_data.ld_filter_view.set_height(vis_line_t(filter_height));
+    if (!vis && lnav_data.ld_mode == ln_mode_t::FILE_DETAILS) {
+        filter_height = 5;
+        vis = bottom.try_consume(filter_height + (config_panel_open ? 1 : 0)
+                                 + (filters_supported ? 1 : 0));
+    }
+    lnav_data.ld_filter_view.set_height(vis_line_t(filter_height)
+                                        - (filters_supported ? 0_vl : 1_vl));
     lnav_data.ld_filter_view.set_y(bottom + 2);
     lnav_data.ld_filter_view.set_width(width);
     lnav_data.ld_filter_view.set_visible(filters_open && vis);
     filter_source->fss_editor->set_width(width - 26);
 
-    lnav_data.ld_files_view.set_height(vis_line_t(filter_height));
+    lnav_data.ld_files_view.set_height(vis_line_t(filter_height)
+                                       - (filters_supported ? 0_vl : 1_vl));
     lnav_data.ld_files_view.set_y(bottom + 2);
     lnav_data.ld_files_view.set_width(files_width);
     lnav_data.ld_files_view.set_visible(files_open && vis);
 
-    lnav_data.ld_file_details_view.set_height(vis_line_t(filter_height));
+    lnav_data.ld_file_details_view.set_height(
+        vis_line_t(filter_height) - (filters_supported ? 0_vl : 1_vl));
     lnav_data.ld_file_details_view.set_y(bottom + 2);
     lnav_data.ld_file_details_view.set_x(files_width);
     lnav_data.ld_file_details_view.set_width(
@@ -1639,6 +1643,9 @@ set_view_mode(ln_mode_t mode)
         case ln_mode_t::FILES:
         case ln_mode_t::FILTER:
         case ln_mode_t::SPECTRO_DETAILS: {
+            if (!lnav_data.ld_filter_view.get_selection()) {
+                lnav_data.ld_filter_view.set_selection(0_vl);
+            }
             lnav_data.ld_files_source.text_selection_changed(
                 lnav_data.ld_files_view);
             breadcrumb_view->set_enabled(false);
@@ -1663,7 +1670,7 @@ set_view_mode(ln_mode_t mode)
     lnav_data.ld_mode = mode;
 }
 
-static std::vector<view_curses*>
+std::vector<view_curses*>
 all_views()
 {
     static auto* breadcrumb_view = injector::get<breadcrumb_curses*>();
@@ -1785,6 +1792,7 @@ lnav_behavior::mouse_event(
                         case ln_mode_t::FILES:
                         case ln_mode_t::FILE_DETAILS:
                         case ln_mode_t::FILTER:
+                        case ln_mode_t::SPECTRO_DETAILS:
                             // Clicking on the main view when the config panels
                             // are open should return us to paging.
                             set_view_mode(ln_mode_t::PAGING);

@@ -1,3 +1,106 @@
+
+## lnav v0.14.0
+
+Features:
+* Log formats can now specify source file/line and thread
+  ID with the `src-file-field`, `src-line-field`, and
+  `thread-id-field` properties. These fields can then be
+  accessed in the SQL vtables as `log_src_file`,
+  `log_src_line`, and `log_thread_id`.
+* The `all_opids` and `all_thread_ids` virtual tables
+  have been added to make it simple to discover all of
+  the operations and threads across all log files.
+* The `:xopen` command will now open text files in an
+  external editor.  To open the file at a particular
+  line/column, add a URL fragment of the form
+  `L<line>C<column>`.
+* When opening the contents of the prompt in an external
+  editor (`CTRL+O`), the cursor position will be preserved,
+  if possible.
+* The `external-editor` configuration has been expanded
+  with extra properties to help lnav choose the right one
+  to use:
+  - The `config-dir` property specifies the name of the
+    directory that stores the editor's configuration in a
+    source tree.  If the directory is found in an ancestor
+    of the path to be opened, and it has the most recent
+    modified time, the associated editor will be used.
+  - The `prefers` property is a regular expression that
+    will be tested against the full path to be opened.
+    If matched, that editor will be chosen.
+* The `:breakpoint`, `:toggle-breakpoint`, and
+  `:clear-breakpoints` commands have been added to support
+  setting/clearing breakpoints for log messages.  The
+  `CTRL-B` shortcut toggles a breakpoint on the focused
+  line in the LOG view.  Also, if the log format specifies
+  source file/line fields, the first character of the
+  source file will be underlined and can be clicked to
+  toggle a breakpoint.  Once breakpoints have been added,
+  you can press `F7`/`F8` to move to the previous/next log
+  message that matches a breakpoint.
+* The `:external-access` command has been added to open a
+  localhost HTTP port that can be used to remotely control
+  lnav. Requests can be sent to execute commands and poll
+  for changes in the view state.
+
+## lnav v0.13.2
+
+Bug Fixes:
+* Some keys were not recognized correctly because the
+  Kitty keyboard protocol handling was broken at the
+  last minute.
+* The TUI no longer opens if a bad file name is passed.
+* The abbreviated month `%b` time-conversion was not
+  always falling back to English locale, which could
+  prevent lnav from starting up.
+* The top of the LOG view could move in some cases when
+  filtering was enabled.
+* Some status bar fields were not always showing
+  updates.
+
+## lnav v0.13.1
+
+Features:
+* Initial support for Windows.  Configuration should be stored
+  in `%APPDATA%`.  The binary is built using msys2.  So, it
+  depends on msys-2.0.dll being in the same directory.  No other
+  dependencies should be needed.
+* Removed dependency on ncurses during the build.  The terminfo
+  files are still used during runtime, but fallback terminfo
+  files for common terminals are included in the binary.
+* Added the postgres_log format.  In addition, you can use
+  `:annotate` on a statement error line (e.g. syntax error
+  at or near "null" at character 522) to attach an annotation
+  with the statement and a pointer to the location of the error.
+* Added the mysql_gen_log, mysql_error_log, and mysql_slow_log
+  formats.  There is also a `mysql_slow_stats` search table
+  that captures the various statistics available in a slow
+  query log message (e.g. `query_time`, `lock_time`, ...).
+* Added laravel_log format.
+* Annotation handlers can now be lnav scripts if the "handler"
+  field starts with a pipe (`|`).
+* The `<span>` tag in a Markdown now supports
+  `white-space: nowrap` in the `style` attribute.
+* Anchors can be added to Markdown using `<a name="...">`.
+  Anchors show up in the breadcrumb bar and can be addressed
+  using the `:goto` command.
+
+Interface changes:
+* If all the content in the LOG/TEXT views are filtered out,
+  a notice will be displayed that describes the filters that
+  are in effect.
+* The chart in the SPECTRO view is now shifted to the right
+  so it does not cover the timestamp.
+
+Bug Fixes:
+* Fix a crash on startup for some environments.
+* Fix a spurious screen flash on some prompts.
+* Fix an issue with completion of script names.
+* Handle abbreviated timezones (e.g. PDT/PST) in timestamps.
+* Improve HTML handling in Markdown files.
+* Fixed various issues in the SPECTRO view.
+* Minor performance improvements.
+
 ## lnav v0.13.0
 
 Interface changes:

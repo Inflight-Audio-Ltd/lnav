@@ -59,7 +59,7 @@
 #include "vtab_module.hh"
 
 #ifdef HAVE_RUST_DEPS
-#    include "prqlc.cxx.hh"
+#    include "lnav_rs_ext.cxx.hh"
 #endif
 
 using namespace std::literals::chrono_literals;
@@ -285,28 +285,28 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
         log_info("compiling PRQL: %s", stmt_str.c_str());
 
 #if HAVE_RUST_DEPS
-        auto opts = prqlc::Options{true, "sql.sqlite", true};
+        auto opts = lnav_rs_ext::Options{true, "sql.sqlite", true};
 
         auto tree = sqlite_extension_prql;
         for (const auto& mod : lnav_prql_modules) {
-            log_debug("prqlc adding mod %s", mod.get_name());
-            tree.emplace_back(prqlc::SourceTreeElement{
+            log_debug("lnav_rs_ext adding mod %s", mod.get_name());
+            tree.emplace_back(lnav_rs_ext::SourceTreeElement{
                 mod.get_name(),
                 mod.to_string_fragment_producer()->to_string(),
             });
         }
-        tree.emplace_back(prqlc::SourceTreeElement{"", stmt_str});
+        tree.emplace_back(lnav_rs_ext::SourceTreeElement{"", stmt_str});
         log_debug("BEGIN compiling tree");
-        auto cr = prqlc::compile_tree(tree, opts);
+        auto cr = lnav_rs_ext::compile_tree(tree, opts);
         log_debug("END compiling tree");
 
         for (const auto& msg : cr.messages) {
-            if (msg.kind != prqlc::MessageKind::Error) {
+            if (msg.kind != lnav_rs_ext::MessageKind::Error) {
                 continue;
             }
 
             auto stmt_al = attr_line_t(stmt_str);
-            readline_sqlite_highlighter(stmt_al, 0);
+            readline_sql_highlighter(stmt_al, lnav::sql::dialect::prql, 0);
             auto um
                 = lnav::console::user_message::error(
                       attr_line_t("unable to compile PRQL: ").append(stmt_al))
@@ -470,10 +470,13 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
 
                     log_error("sqlite3_step error code: %d", retcode);
                     auto um = sqlite3_error_to_user_message(lnav_data.ld_db)
-                                  .with_context_snippets(ec.ec_source)
-                                  .remove_internal_snippets()
                                   .with_note(bound_note)
                                   .move();
+
+                    if (!ec.get_provenance<exec_context::keyboard_input>()) {
+                        um.with_context_snippets(ec.ec_source)
+                            .remove_internal_snippets();
+                    }
 
                     return Err(um);
                 }
@@ -523,7 +526,7 @@ execute_sql(exec_context& ec, const std::string& sql, std::string& alt_msg)
             auto& dls = *(ec.ec_label_source_stack.back());
             if (!dls.dls_row_cursors.empty()) {
                 lnav_data.ld_views[LNV_DB].reload_data();
-                lnav_data.ld_views[LNV_DB].set_top(0_vl);
+                lnav_data.ld_views[LNV_DB].set_selection(0_vl);
                 lnav_data.ld_views[LNV_DB].set_left(0);
                 if (lnav_data.ld_flags & LNF_HEADLESS) {
                     if (ec.ec_local_vars.size() == 1) {
@@ -690,7 +693,7 @@ execute_file(exec_context& ec, const std::string& path_and_args)
     if (iter != scripts.as_scripts.end()) {
         paths_to_exec = iter->second;
     }
-    if (is_url(script_name)) {
+    if (lnav::filesystem::is_url(script_name)) {
         auto_mem<CURLU> cu(curl_url_cleanup);
         cu = curl_url();
         auto set_rc = curl_url_set(cu, CURLUPART_URL, script_name.c_str(), 0);
@@ -1280,7 +1283,7 @@ exec_context::add_error_context(lnav::console::user_message& um)
             break;
     }
 
-    if (um.um_snippets.empty()) {
+    if (!this->get_provenance<keyboard_input>() && um.um_snippets.empty()) {
         um.with_snippets(this->ec_source);
         um.remove_internal_snippets();
     }

@@ -105,6 +105,8 @@ struct shared_buffer_ref {
         return (this->sb_data <= ptr && ptr < buffer_end);
     }
 
+    const file_range::metadata& get_metadata() const { return this->sb_metadata; }
+
     file_range::metadata& get_metadata() { return this->sb_metadata; }
 
     char* get_writable_data(size_t length)
@@ -125,6 +127,15 @@ struct shared_buffer_ref {
     {
         return string_fragment{
             this->sb_data, (int) offset, (int) (offset + len)};
+    }
+
+    string_fragment to_string_fragment(const line_range& lr) const
+    {
+        if (!lr.is_valid()) {
+            return string_fragment::invalid();
+        }
+
+        return this->to_string_fragment(lr.lr_start, lr.length());
     }
 
     string_fragment to_string_fragment() const

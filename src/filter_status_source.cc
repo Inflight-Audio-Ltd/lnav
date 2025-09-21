@@ -36,8 +36,8 @@
 #include "filter_sub_source.hh"
 #include "lnav.hh"
 
-static constexpr auto TOGGLE_MSG = "Press " ANSI_BOLD("TAB") " to edit ";
-static constexpr auto EXIT_MSG = "Press " ANSI_BOLD("ESC") " to exit ";
+static constexpr auto TOGGLE_MSG = "Press " ANSI_BOLD("TAB") " to edit "_frag;
+static constexpr auto EXIT_MSG = "Press " ANSI_BOLD("ESC") " to exit "_frag;
 
 static constexpr auto CREATE_HELP
     = ANSI_BOLD("i") "/" ANSI_BOLD("o") ": Create in/out";
@@ -141,7 +141,8 @@ filter_status_source::statusview_fields()
 
             auto& fc = lnav_data.ld_active_files;
             if (fc.fc_name_to_errors->readAccess()->size() == 1) {
-                this->tss_error.set_value(" error: a file cannot be opened ");
+                this->tss_error.set_value(
+                    " error: a file cannot be opened "_frag);
             } else {
                 this->tss_error.set_value(
                     " error: %u files cannot be opened ",
@@ -176,7 +177,7 @@ filter_status_source::statusview_fields()
             filter_count += 1;
         }
         if (filter_count == 0) {
-            this->tss_fields[TSF_COUNT].set_value("");
+            this->tss_fields[TSF_COUNT].set_value(""_frag);
         } else {
             this->tss_fields[TSF_COUNT].set_value(
                 " " ANSI_BOLD("%d") " of " ANSI_BOLD("%d") " enabled ",
@@ -200,18 +201,22 @@ filter_status_source::statusview_value_for_field(int field)
     return this->tss_fields[field];
 }
 
-void
+bool
 filter_status_source::update_filtered(text_sub_source* tss)
 {
     if (tss == nullptr) {
-        return;
+        return false;
     }
 
     auto& sf = this->tss_fields[TSF_FILTERED];
+    auto retval = false;
 
     if (tss->get_filtered_count() == 0) {
         if (tss->tss_apply_filters) {
-            sf.clear();
+            if (!sf.empty()) {
+                sf.clear();
+                retval = true;
+            }
         } else {
             sf.set_value(
                 " \u2718 Filtering disabled, re-enable with " ANSI_BOLD_START
@@ -227,14 +232,18 @@ filter_status_source::update_filtered(text_sub_source* tss)
                 al.with_attr(
                     string_attr(line_range{0, -1},
                                 VC_STYLE.value(text_attrs::with_bold())));
+                retval = true;
             }
         } else {
             this->tss_fields[TSF_FILTERED].set_role(role_t::VCR_ALERT_STATUS);
             this->bss_last_filtered_count = tss->get_filtered_count();
             timer.start_fade(this->bss_filter_counter, 3);
+            sf.set_value("%'9d Lines not shown ", tss->get_filtered_count());
+            retval = true;
         }
-        sf.set_value("%'9d Lines not shown ", tss->get_filtered_count());
     }
+
+    return retval;
 }
 
 filter_help_status_source::filter_help_status_source()

@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <regex>
 #include <stdexcept>
@@ -155,10 +156,10 @@ ensure_dotlnav()
         "formats/default",
         "formats/installed",
         "staging",
-        "stdin-captures",
         "crash",
     };
 
+    std::error_code ec;
     auto path = lnav::paths::dotlnav();
 
     for (const auto* sub_path : subdirs) {
@@ -179,7 +180,6 @@ ensure_dotlnav()
         auto crash_glob = path / "crash-*";
 
         if (glob(crash_glob.c_str(), GLOB_NOCHECK, nullptr, gl.inout()) == 0) {
-            std::error_code ec;
             for (size_t lpc = 0; lpc < gl->gl_pathc; lpc++) {
                 auto crash_file = std::filesystem::path(gl->gl_pathv[lpc]);
 
@@ -202,9 +202,10 @@ ensure_dotlnav()
         }
     }
 
-    {
+    auto old_cap_path = path / "stdin-captures";
+    if (std::filesystem::exists(old_cap_path, ec)) {
         static_root_mem<glob_t, globfree> gl;
-        auto cap_glob = path / "stdin-captures/*";
+        auto cap_glob = old_cap_path / "*";
 
         if (glob(cap_glob.c_str(), GLOB_NOCHECK, nullptr, gl.inout()) == 0) {
             auto old_time
@@ -226,6 +227,11 @@ ensure_dotlnav()
                 log_info("Removing old stdin capture: %s", gl->gl_pathv[lpc]);
                 log_perror(remove(gl->gl_pathv[lpc]));
             }
+        }
+
+        if (std::filesystem::is_empty(old_cap_path, ec)) {
+            log_info("removing old stdin-captures directory");
+            std::filesystem::remove(old_cap_path, ec);
         }
     }
 }
@@ -583,14 +589,14 @@ static const struct json_path_container keymap_defs_handlers = {
         .with_children(keymap_def_handlers),
 };
 
-static const json_path_handler_base::enum_value_t _movement_values[] = {
-    {"top", config_movement_mode::TOP},
-    {"cursor", config_movement_mode::CURSOR},
+static constexpr json_path_handler_base::enum_value_t _movement_values[] = {
+    {"top"_frag, config_movement_mode::TOP},
+    {"cursor"_frag, config_movement_mode::CURSOR},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
 
-static const struct json_path_container movement_handlers = {
+static const json_path_container movement_handlers = {
     yajlpp::property_handler("mode")
         .with_synopsis("top|cursor")
         .with_enum_values(_movement_values)
@@ -600,9 +606,9 @@ static const struct json_path_container movement_handlers = {
         .for_field<>(&_lnav_config::lc_ui_movement, &movement_config::mode),
 };
 
-static const json_path_handler_base::enum_value_t _mouse_mode_values[] = {
-    {"disabled", lnav_mouse_mode::disabled},
-    {"enabled", lnav_mouse_mode::enabled},
+static constexpr json_path_handler_base::enum_value_t _mouse_mode_values[] = {
+    {"disabled"_frag, lnav_mouse_mode::disabled},
+    {"enabled"_frag, lnav_mouse_mode::enabled},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
@@ -943,6 +949,10 @@ static const struct json_path_container theme_syntax_styles_handlers = {
         .with_description("Styling for quoted-code borders")
         .for_child(&lnav_theme::lt_style_code_border)
         .with_children(style_config_handlers),
+    yajlpp::property_handler("object-key")
+        .with_description("Styling for a key in an object")
+        .for_child(&lnav_theme::lt_style_object_key)
+        .with_children(style_config_handlers),
     yajlpp::property_handler("keyword")
         .with_description("Styling for keywords in source files")
         .for_child(&lnav_theme::lt_style_keyword)
@@ -1115,7 +1125,7 @@ static const struct json_path_container theme_log_level_styles_handlers = {
         .with_path_provider<lnav_theme>(
             [](struct lnav_theme* cfg, std::vector<std::string>& paths_out) {
                 for (int lpc = LEVEL_TRACE; lpc < LEVEL__MAX; lpc++) {
-                    paths_out.emplace_back(level_names[lpc]);
+                    paths_out.emplace_back(level_names[lpc].to_string());
                 }
             })
         .with_children(style_config_handlers),
@@ -1219,10 +1229,10 @@ static const struct json_path_container theme_defs_handlers = {
         .with_children(theme_def_handlers),
 };
 
-static const json_path_handler_base::enum_value_t _time_column_values[] = {
-    {"disabled", logfile_sub_source_ns::time_column_feature_t::Disabled},
-    {"enabled", logfile_sub_source_ns::time_column_feature_t::Enabled},
-    {"default", logfile_sub_source_ns::time_column_feature_t::Default},
+static constexpr json_path_handler_base::enum_value_t _time_column_values[] = {
+    {"disabled"_frag, logfile_sub_source_ns::time_column_feature_t::Disabled},
+    {"enabled"_frag, logfile_sub_source_ns::time_column_feature_t::Enabled},
+    {"default"_frag, logfile_sub_source_ns::time_column_feature_t::Default},
 
     json_path_handler_base::ENUM_TERMINATOR,
 };
@@ -1591,6 +1601,15 @@ static const json_path_container editor_impl_handlers = {
         .with_description("The command used to open text for editing")
         .with_example("code -")
         .for_field(&lnav::external_editor::impl::i_command),
+    yajlpp::property_handler("config-dir")
+        .with_description(
+            "The name of the directory where editor configuration is stored")
+        .with_example(".idea")
+        .for_field(&lnav::external_editor::impl::i_config_dir),
+    yajlpp::property_handler("prefers")
+        .with_description("")
+        .with_example("^.*(?:\\.cpp)$")
+        .for_field(&lnav::external_editor::impl::i_prefers),
 };
 
 static const json_path_container editor_impls_handlers = {

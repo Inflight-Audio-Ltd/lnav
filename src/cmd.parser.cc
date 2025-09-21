@@ -102,7 +102,7 @@ parsed::arg_at(int x) const
                         auto al = attr_line_t(se.se_value);
                         auto al_x = x - se.se_origin.sf_begin;
 
-                        annotate_sql_statement(al);
+                        annotate_sql_statement(al, lnav::sql::dialect::sqlite);
                         for (const auto& attr : al.al_attrs) {
                             if (al_x < attr.sa_range.lr_start
                                 || attr.sa_range.lr_end < al_x)
@@ -343,7 +343,9 @@ parse_for(mode_t mode,
                     case help_parameter_format_t::HPF_TIMEZONE:
                     case help_parameter_format_t::HPF_FILE_WITH_ZONE:
                     case help_parameter_format_t::HPF_VISIBLE_FILES:
-                    case help_parameter_format_t::HPF_HIDDEN_FILES: {
+                    case help_parameter_format_t::HPF_HIDDEN_FILES:
+                    case help_parameter_format_t::HPF_BREAKPOINT:
+                    case help_parameter_format_t::HPF_KNOWN_BREAKPOINT: {
                         if (!param.ht_enum_values.empty()) {
                             auto enum_iter
                                 = std::find(param.ht_enum_values.begin(),

@@ -106,7 +106,7 @@ filter_sub_source::list_input_handle_key(listview_curses& lv, const ncinput& ch)
             auto* tss = top_view->get_sub_source();
             auto& fs = tss->get_filters();
 
-            if (fs.empty()) {
+            if (fs.empty() || !lv.get_selection()) {
                 return true;
             }
 
@@ -123,7 +123,7 @@ filter_sub_source::list_input_handle_key(listview_curses& lv, const ncinput& ch)
             auto* tss = top_view->get_sub_source();
             auto& fs = tss->get_filters();
 
-            if (fs.empty()) {
+            if (fs.empty() || !lv.get_selection()) {
                 return true;
             }
 
@@ -145,7 +145,7 @@ filter_sub_source::list_input_handle_key(listview_curses& lv, const ncinput& ch)
             auto* tss = top_view->get_sub_source();
             auto& fs = tss->get_filters();
 
-            if (fs.empty()) {
+            if (fs.empty() || !lv.get_selection()) {
                 return true;
             }
 
@@ -228,7 +228,7 @@ filter_sub_source::list_input_handle_key(listview_curses& lv, const ncinput& ch)
             auto* tss = top_view->get_sub_source();
             auto& fs = tss->get_filters();
 
-            if (fs.empty()) {
+            if (fs.empty() || !lv.get_selection()) {
                 return true;
             }
 
@@ -373,7 +373,8 @@ filter_sub_source::text_value_for_line(textview_curses& tc,
             readline_regex_highlighter(content, std::nullopt);
             break;
         case filter_lang_t::SQL:
-            readline_sqlite_highlighter(content, std::nullopt);
+            readline_sql_highlighter(
+                content, lnav::sql::dialect::sqlite, std::nullopt);
             break;
         case filter_lang_t::NONE:
             break;
@@ -631,6 +632,7 @@ filter_sub_source::rl_perform(textinput_curses& rc)
     auto tf = *iter;
     auto new_value = rc.get_content();
 
+    fs.fs_generation += 1;
     if (new_value.empty()) {
         this->rl_abort(rc);
     } else {

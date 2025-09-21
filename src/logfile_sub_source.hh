@@ -117,119 +117,7 @@ private:
     content_line_t llh_backing[MAX_SIZE];
 };
 
-class logline_window {
-public:
-    logline_window(logfile_sub_source& lss,
-                   vis_line_t start_vl,
-                   vis_line_t end_vl)
-        : lw_source(lss), lw_start_line(start_vl), lw_end_line(end_vl)
-    {
-    }
-
-    class iterator;
-
-    class logmsg_info {
-    public:
-        logmsg_info(logfile_sub_source& lss, vis_line_t vl);
-
-        vis_line_t get_vis_line() const { return this->li_line; }
-
-        size_t get_line_count() const;
-
-        uint32_t get_file_line_number() const { return this->li_line_number; }
-
-        logfile* get_file_ptr() const { return this->li_file; }
-
-        logline& get_logline() const { return *this->li_logline; }
-
-        const string_attrs_t& get_attrs() const
-        {
-            this->load_msg();
-            return this->li_string_attrs;
-        }
-
-        const logline_value_vector& get_values() const
-        {
-            this->load_msg();
-            return this->li_line_values;
-        }
-
-        std::optional<bookmark_metadata*> get_metadata() const;
-
-        Result<auto_buffer, std::string> get_line_hash() const;
-
-        struct metadata_edit_guard {
-            ~metadata_edit_guard();
-
-            bookmark_metadata& operator*();
-
-        private:
-            friend logmsg_info;
-
-            metadata_edit_guard(logmsg_info& li) : meg_logmsg_info(li) {}
-            logmsg_info& meg_logmsg_info;
-        };
-
-        metadata_edit_guard edit_metadata()
-        {
-            return metadata_edit_guard(*this);
-        }
-
-        std::string to_string(const struct line_range& lr) const;
-
-    private:
-        friend iterator;
-        friend metadata_edit_guard;
-        friend logline_window;
-
-        void next_msg();
-        void prev_msg();
-        void load_msg() const;
-        bool is_valid() const;
-
-        logfile_sub_source& li_source;
-        vis_line_t li_line;
-        uint32_t li_line_number;
-        logfile* li_file{nullptr};
-        logfile::iterator li_logline;
-        mutable string_attrs_t li_string_attrs;
-        mutable logline_value_vector li_line_values;
-    };
-
-    class iterator {
-    public:
-        iterator(logfile_sub_source& lss, vis_line_t vl) : i_info(lss, vl) {}
-
-        iterator& operator++();
-        iterator& operator--();
-
-        bool operator!=(const iterator& rhs) const
-        {
-            return this->i_info.get_vis_line() != rhs.i_info.get_vis_line();
-        }
-
-        bool operator==(const iterator& rhs) const
-        {
-            return this->i_info.get_vis_line() == rhs.i_info.get_vis_line();
-        }
-
-        const logmsg_info& operator*() const { return this->i_info; }
-
-        const logmsg_info* operator->() const { return &this->i_info; }
-
-    private:
-        logmsg_info i_info;
-    };
-
-    iterator begin();
-
-    iterator end();
-
-private:
-    logfile_sub_source& lw_source;
-    vis_line_t lw_start_line;
-    vis_line_t lw_end_line;
-};
+class logline_window;
 
 /**
  * Delegate class that merges the contents of multiple log files into a single
@@ -272,6 +160,8 @@ public:
 
     void set_force_rebuild() { this->lss_force_rebuild = true; }
 
+    bool is_rebuild_forced() const { return this->lss_force_rebuild; }
+
     void set_min_log_level(log_level_t level)
     {
         if (this->lss_min_log_level != level) {
@@ -289,6 +179,8 @@ public:
             this->text_filters_changed();
         }
     }
+
+    void update_filter_hash_state(hasher& h) const;
 
     bool get_marked_only() { return this->lss_marked_only; }
 
@@ -514,7 +406,7 @@ public:
 
     content_line_t at(vis_line_t vl) const
     {
-        return this->lss_index[this->lss_filtered_index[vl]];
+        return this->lss_index[this->lss_filtered_index[vl]].value();
     }
 
     content_line_t at_base(vis_line_t vl)
@@ -528,21 +420,12 @@ public:
         return this->at(vl);
     }
 
-    logline_window window_at(vis_line_t start_vl, vis_line_t end_vl)
-    {
-        return logline_window(*this, start_vl, end_vl);
-    }
+    std::unique_ptr<logline_window> window_at(vis_line_t start_vl,
+                                              vis_line_t end_vl);
 
-    logline_window window_at(vis_line_t start_vl)
-    {
-        return logline_window(*this, start_vl, start_vl + 1_vl);
-    }
+    std::unique_ptr<logline_window> window_at(vis_line_t start_vl);
 
-    logline_window window_to_end(vis_line_t start_vl)
-    {
-        return logline_window(
-            *this, start_vl, vis_line_t(this->text_line_count()));
-    }
+    std::unique_ptr<logline_window> window_to_end(vis_line_t start_vl);
 
     /**
      * Container for logfile references that keeps of how many lines in the
@@ -556,13 +439,19 @@ public:
               ld_visible(lf->is_indexing())
         {
             lf->set_logline_observer(&this->ld_filter_state);
+            this->ld_file_ptr = lf.get();
         }
 
-        void clear() { this->ld_filter_state.lfo_filter_state.clear(); }
+        void clear()
+        {
+            this->ld_filter_state.lfo_filter_state.clear();
+            this->ld_file_ptr = nullptr;
+        }
 
         void set_file(const std::shared_ptr<logfile>& lf)
         {
             this->ld_filter_state.lfo_filter_state.tfs_logfile = lf;
+            this->ld_file_ptr = lf.get();
             lf->set_logline_observer(&this->ld_filter_state);
         }
 
@@ -571,10 +460,7 @@ public:
             return this->ld_filter_state.lfo_filter_state.tfs_logfile;
         }
 
-        logfile* get_file_ptr() const
-        {
-            return this->ld_filter_state.lfo_filter_state.tfs_logfile.get();
-        }
+        logfile* get_file_ptr() const { return this->ld_file_ptr; }
 
         bool is_visible() const
         {
@@ -587,12 +473,15 @@ public:
         line_filter_observer ld_filter_state;
         size_t ld_lines_indexed{0};
         size_t ld_lines_watched{0};
+        logfile* ld_file_ptr{nullptr};
         bool ld_visible;
     };
 
     using iterator = std::vector<std::unique_ptr<logfile_data>>::iterator;
     using const_iterator
         = std::vector<std::unique_ptr<logfile_data>>::const_iterator;
+
+    size_t size() const { return this->lss_files.size(); }
 
     iterator begin() { return this->lss_files.begin(); }
 
@@ -717,9 +606,10 @@ public:
 
     exec_context* get_exec_context() const { return this->lss_exec_context; }
 
-    static const uint64_t MAX_CONTENT_LINES = (1ULL << 40) - 1;
-    static const uint64_t MAX_LINES_PER_FILE = 256 * 1024 * 1024;
-    static const uint64_t MAX_FILES = (MAX_CONTENT_LINES / MAX_LINES_PER_FILE);
+    static constexpr uint64_t MAX_CONTENT_LINES = 1ULL << 40;
+    static constexpr uint64_t MAX_LINES_PER_FILE = 1ULL << 27;
+    static constexpr uint64_t MAX_FILES
+        = (MAX_CONTENT_LINES / MAX_LINES_PER_FILE);
 
     std::function<void(logfile_sub_source&, file_off_t, file_size_t)>
         lss_sorting_observer;
@@ -729,16 +619,43 @@ public:
     void quiesce();
 
     struct __attribute__((__packed__)) indexed_content {
-        indexed_content() = default;
+        enum class level_t : uint8_t {
+            normal,
+            warning,
+            error,
+        };
 
-        indexed_content(content_line_t cl) : ic_value(cl) {}
-
-        operator content_line_t() const
+        static level_t level_from_log(const logfile::iterator iter)
         {
-            return content_line_t(this->ic_value);
+            if (!iter->is_message()) {
+                return level_t::normal;
+            }
+            switch (iter->get_msg_level()) {
+                case log_level_t::LEVEL_WARNING:
+                    return level_t::warning;
+                case log_level_t::LEVEL_ERROR:
+                case log_level_t::LEVEL_FATAL:
+                case log_level_t::LEVEL_CRITICAL:
+                    return level_t::error;
+                default:
+                    return level_t::normal;
+            }
         }
 
-        uint64_t ic_value : 40;
+        indexed_content() = default;
+
+        indexed_content(content_line_t cl, const logfile::iterator iter)
+            : ic_value(cl),
+              ic_level(lnav::enums::to_underlying(level_from_log(iter)))
+        {
+        }
+
+        content_line_t value() const { return content_line_t(this->ic_value); }
+
+        level_t level() const { return static_cast<level_t>(this->ic_level); }
+
+        uint64_t ic_value : 38;
+        uint8_t ic_level : 2;
     };
 
     big_array<indexed_content> lss_index;
@@ -789,7 +706,8 @@ private:
     std::vector<uint32_t> lss_filtered_index;
     auto_mem<sqlite3_stmt> lss_preview_filter_stmt{sqlite3_finalize};
 
-    bookmarks<content_line_t>::type lss_user_marks;
+    bookmarks<content_line_t>::type lss_user_marks{
+        bookmarks<content_line_t>::create_array()};
     auto_mem<sqlite3_stmt> lss_marker_stmt{sqlite3_finalize};
     std::string lss_marker_stmt_text;
 

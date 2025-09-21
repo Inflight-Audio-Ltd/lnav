@@ -156,7 +156,7 @@ jobs:
       - name: checkout
         uses: actions/checkout@v3
       - name: install packages
-        run: brew install pcre2 sqlite ncurses xz zstd lz4 libarchive curl autoconf automake libunistring
+        run: brew install pcre2 sqlite xz zstd lz4 libarchive curl autoconf automake libunistring
       - name: autogen
         run: ./autogen.sh
       - name: configure
@@ -165,10 +165,10 @@ jobs:
             --with-libcurl=/usr \
             --with-pcre2=$(brew --prefix pcre2) \
             --with-sqlite3=$(brew --prefix sqlite3) \
-            "CPPFLAGS=-I$(brew --prefix libunistring)/include -I$(brew --prefix ncurses)/include" \
-            "CXXFLAGS=-g2 -O2" \
-            'CFLAGS=-O2 -g2' \
-            "LDFLAGS=-L$(brew --prefix ncurses)/lib -L$(brew --prefix xz)/lib -L$(brew --prefix zstd)/lib/ -L$(brew --prefix lz4)/lib/ -L$(brew --prefix libunistring)/lib" \
+            "CPPFLAGS=-I$(brew --prefix libunistring)/include" \
+            "CXXFLAGS=-g2 -O3" \
+            'CFLAGS=-O3 -g2' \
+            "LDFLAGS=-L$(brew --prefix xz)/lib -L$(brew --prefix zstd)/lib/ -L$(brew --prefix lz4)/lib/ -L$(brew --prefix libunistring)/lib" \
             --with-libarchive=$(brew --prefix libarchive) \
             "LIBS=-llzma -lexpat -lzstd -liconv -llz4 -lbz2 -lz -lpcre2-8"
       - name: make
@@ -223,6 +223,11 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
+      # Install Rust using moonrepo/setup-rust
+      - name: Setup Rust
+        uses: moonrepo/setup-rust@v1
+        with:
+          rust-version: stable
       - name: "${{ matrix.icon }} Setup MSYS2"
         uses: msys2/setup-msys2@v2
         with:
@@ -242,7 +247,6 @@ jobs:
             msys/liblzma-devel
             msys/libsqlite-devel
             msys/libunistring-devel
-            msys/ncurses-devel
             msys/pcre2-devel
             msys/zlib-devel
       - name: "🔧 Generate and configure"
@@ -257,7 +261,7 @@ jobs:
           ../lnav/configure \
                       --enable-static \
                       LDFLAGS="-static" \
-                      CPPFLAGS="-O2 -DNCURSES_STATIC" \
+                      CPPFLAGS="-O3" \
                       CXXFLAGS="-fPIC" \
                       CFLAGS="-fPIC" \
                       LIBS="-larchive -lssh2 -llzma -lexpat -llz4 -lz -lzstd -lssl -lcrypto -liconv -lunistring -lbrotlicommon -lcrypt32" \
@@ -281,23 +285,62 @@ jobs:
           export PREFIX=$PWD/${{ env.LNAV_BASENAME }}
           mkdir -p $PREFIX
           make install
-          ldd $PREFIX/bin/lnav.exe | grep /usr | cut -d' ' -f3 | xargs -I {} cp {} $PREFIX/bin/
-          mkdir -p $PREFIX/lib/terminfo/78
-          cp -r /usr/lib/terminfo/78/xterm-256color $PREFIX/lib/terminfo/78/
+          cp ../lnav/release/signed-msys-2.0.dll.gz $PREFIX/bin/msys-2.0.dll.gz
+          gunzip $PREFIX/bin/msys-2.0.dll.gz
           cp ../lnav/README ../lnav/NEWS.md .
-          zip -r ../lnav/${{ env.LNAV_ZIPNAME }} ${{ env.LNAV_BASENAME }}
+          mkdir ../lnav/bin
+          cp $PREFIX/bin/* ../lnav/bin/
       - name: "💉 Basic test"
+        if: false
         run: |
           set -x
           cd ../lnav-build
           export PREFIX=$PWD/${{ env.LNAV_BASENAME }}
           $PREFIX/bin/lnav.exe -n ../lnav/test/logfile_multiline.0
-      - name: "⬆️ Upload a Build Artifact"
+      - name: upload-unsigned-artifact
+        id: upload-unsigned-artifact
         uses: actions/upload-artifact@v4
         with:
           name: lnav-windows-${{ matrix.arch }}.zip
-          path: ${{ env.LNAV_ZIPNAME }}
+          # path: ${{ env.LNAV_ZIPNAME }}
+          path: |
+            bin/lnav.exe
+            bin/msys-2.0.dll
+            README
+            NEWS.md
           if-no-files-found: error
+      - name: sign
+        if: ${{ inputs.upload_url != '' }}
+        uses: signpath/github-action-submit-signing-request@v1.1
+        env:
+          # select release-signing policy for main and release branches
+          SIGNPATH_SIGNING_POLICY_SLUG: |
+            ${{ ((inputs.lnav_version_number != '')
+              && 'release-signing')
+              || 'test-signing' }}
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: '${{ vars.SIGNPATH_ORGANIZATION_ID }}'
+          project-slug: 'lnav'
+          signing-policy-slug: '${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}'
+          github-artifact-id: "${{steps.upload-unsigned-artifact.outputs.artifact-id}}"
+          wait-for-completion: true
+          output-artifact-directory: 'lnav-signed'
+      - name: upload-signed-artifact
+        id: upload-signed-artifact
+        if: ${{ inputs.upload_url != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lnav-signed-windows-${{ matrix.arch }}.zip
+          path: "lnav-signed"
+          if-no-files-found: error
+      - name: "Produce zip"
+        if: ${{ inputs.upload_url != '' }}
+        run: |
+          set -x
+          cp lnav-signed/bin/* ../lnav-build/${{ env.LNAV_BASENAME }}/bin/
+          cd ../lnav-build
+          zip -r ../lnav/${{ env.LNAV_ZIPNAME }} ${{ env.LNAV_BASENAME }}
       - name: Upload windows archive
         uses: actions/upload-release-asset@v1.0.2
         if: ${{ inputs.upload_url != '' }}

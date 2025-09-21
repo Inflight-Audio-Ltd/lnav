@@ -73,6 +73,45 @@ TEST_CASE("date_time_scanner")
     setenv("TZ", "UTC", 1);
 
     lnav_config.lc_log_date_time.c_zoned_to_local = false;
+
+    {
+        static const char* ts = "Mar-18 21:41:15";
+        exttm tm;
+        off_t off = 0;
+        ssize_t len = strlen(ts);
+
+        auto rc = ptime_fmt("%b-%d %H:%M:%S", &tm, ts, off, len);
+        CHECK(rc);
+    }
+
+    {
+        const auto sf = string_fragment::from_const("2022-03-02T10:20:30+");
+        timeval tv;
+        exttm tm;
+        date_time_scanner dts;
+        const auto* rc = dts.scan(sf.data(), sf.length(), nullptr, &tm, tv);
+        auto matched_size = rc - sf.data();
+        auto rem = sf.substr(matched_size);
+        CHECK(rem == "+");
+    }
+
+    {
+        const auto sf
+            = string_fragment::from_const("2025-04-24T19:51:48.55604564Z");
+        timeval tv;
+        exttm tm;
+        date_time_scanner dts;
+        const auto* rc = dts.scan(sf.data(), sf.length(), nullptr, &tm, tv);
+        CHECK(rc != nullptr);
+        printf("fmt %s\n", PTIMEC_FORMAT_STR[dts.dts_fmt_lock]);
+        CHECK((tm.et_flags & ETF_NANOS_SET));
+
+        char ts[64];
+        dts.ftime(ts, sizeof(ts), nullptr, tm);
+
+        CHECK(std::string(ts) == std::string("2025-04-24T19:51:48.556045640Z"));
+    }
+
     for (const auto* good_time : GOOD_TIMES) {
         date_time_scanner dts;
         timeval tv;
@@ -107,21 +146,6 @@ TEST_CASE("date_time_scanner")
         dts.ftime(ts, sizeof(ts), nullptr, tm);
 
         CHECK(std::string(ts) == std::string("2014-02-11 16:12:34.123"));
-    }
-
-    {
-        const auto sf = string_fragment::from_const("2025-04-24T19:51:48.55604564Z");
-        timeval tv;
-        exttm tm;
-        date_time_scanner dts;
-        const auto* rc = dts.scan(sf.data(), sf.length(), nullptr, &tm, tv);
-        printf("fmt %s\n", PTIMEC_FORMAT_STR[dts.dts_fmt_lock]);
-        CHECK((tm.et_flags & ETF_NANOS_SET));
-
-        char ts[64];
-        dts.ftime(ts, sizeof(ts), nullptr, tm);
-
-        CHECK(std::string(ts) == std::string("2025-04-24T19:51:48.556045640Z"));
     }
 
     {
@@ -218,6 +242,7 @@ TEST_CASE("date_time_scanner")
     {
         const char* en_date = "Jan  1 12:00:00";
         const char* fr_date = "août 19 11:08:37";
+        const char* fr_date2 = "nov. 29 20:23:37";
         timeval en_tv, fr_tv;
         exttm en_tm, fr_tm;
         date_time_scanner dts;
@@ -228,6 +253,9 @@ TEST_CASE("date_time_scanner")
             dts.clear();
             CHECK(dts.scan(fr_date, strlen(fr_date), nullptr, &fr_tm, fr_tv)
                   != nullptr);
+            dts.clear();
+            assert(dts.scan(fr_date2, strlen(fr_date), nullptr, &fr_tm, fr_tv)
+                   != nullptr);
         }
     }
 

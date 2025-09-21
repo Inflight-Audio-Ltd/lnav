@@ -45,6 +45,7 @@ default-formats.cc: $(BIN2C_PATH) $(FORMAT_FILES)
 
 include keymaps/keymaps.am
 include prql/prql.am
+include terminfos/terminfos.am
 include themes/themes.am
 
 CONFIG_FILES = \
@@ -58,6 +59,9 @@ default-config.cc: $(BIN2C_PATH) $(CONFIG_FILES)
 
 prql-modules.cc: $(BIN2C_PATH) $(PRQL_FILES)
 	$(BIN2C_V)$(BIN2C_PATH) -n lnav_prql_modules prql-modules $(PRQL_FILES)
+
+terminfo-files.cc: $(BIN2C_PATH) $(TERMINFO_FILES)
+	$(BIN2C_V)$(BIN2C_PATH) -n lnav_terminfo_files terminfo-files $(TERMINFO_FILES)
 
 include scripts/scripts.am
 
@@ -73,7 +77,7 @@ builtin-sh-scripts.cc: $(BIN2C_PATH) $(BUILTIN_SHSCRIPTS)
 %-txt.cc: $(srcdir)/%.txt $(BIN2C_PATH)
 	$(BIN2C_V)$(BIN2C_PATH) $(*)-txt $<
 
-%-md.cc: $(srcdir)/%.md $(BIN2C_PATH)
+%-md.cc: %.md $(BIN2C_PATH)
 	$(BIN2C_V)$(BIN2C_PATH) $(*)-md $<
 
 %-sql.cc: $(srcdir)/%.sql $(BIN2C_PATH)
@@ -87,6 +91,9 @@ builtin-sh-scripts.cc: $(BIN2C_PATH) $(BUILTIN_SHSCRIPTS)
 
 %-json.cc: $(srcdir)/%.json $(BIN2C_PATH)
 	$(BIN2C_V)$(BIN2C_PATH) $(*)-json $<
+
+%.o: $(srcdir)/%.rc
+	$(WINDRES) $< -O COFF -o $@
 
 include time_formats.am
 
@@ -113,6 +120,7 @@ LNAV_BUILT_FILES = \
     help-md.cc \
     init-sql.cc \
     prql-modules.cc \
+    terminfo-files.cc \
     time_fmts.cc \
     xml-entities-json.cc \
     xterm-palette-json.cc
@@ -125,14 +133,22 @@ AM_CXXFLAGS = $(CODE_COVERAGE_CXXFLAGS) $(USER_CXXFLAGS)
 
 if HAVE_CARGO
 RUST_DEPS_CPPFLAGS = -DHAVE_RUST_DEPS=1
-PRQLC_DIR = third-party/prqlc-c/target
-RUST_DEPS_LIBS = $(PRQLC_DIR)/release/libprqlc_c.a
-RUST_DEPS_TRIGGER = $(PRQLC_DIR)/release/libprqlc_c.a.dep
+PRQLC_DIR = third-party/lnav-rs-ext/target
+RUST_DEPS_LIBS = $(PRQLC_DIR)/release/liblnav_rs_ext.a
+RUST_DEPS_TRIGGER = $(PRQLC_DIR)/release/liblnav_rs_ext.a.dep
 
-$(RUST_DEPS_LIBS): $(srcdir)/third-party/prqlc-c/src/lib.rs $(srcdir)/third-party/prqlc-c/Cargo.toml
+if HAVE_CXXBRIDGE
+$(srcdir)/third-party/lnav-rs-ext/lnav_rs_ext.cxx.hh: $(srcdir)/third-party/lnav-rs-ext/src/lib.rs
+	(cd $(srcdir)/third-party/lnav-rs-ext/ && $(CXXBRIDGE) --header src/lib.rs) > $@
+
+$(srcdir)/third-party/lnav-rs-ext/lnav_rs_ext.cxx.cc: $(srcdir)/third-party/lnav-rs-ext/src/lib.rs
+	(cd $(srcdir)/third-party/lnav-rs-ext/ && $(CXXBRIDGE) src/lib.rs) > $@
+endif
+
+$(RUST_DEPS_LIBS): $(srcdir)/third-party/lnav-rs-ext/src/lib.rs $(srcdir)/third-party/lnav-rs-ext/src/ext_access.rs $(srcdir)/third-party/lnav-rs-ext/Cargo.toml
 	mkdir -p $(PRQLC_DIR)
-	env CARGO_TARGET_DIR=third-party/prqlc-c/target $(CARGO_CMD) build --manifest-path \
-	    $(srcdir)/third-party/prqlc-c/Cargo.toml --package prqlc-c --release
+	env CARGO_TARGET_DIR=third-party/lnav-rs-ext/target $(CARGO_CMD) build --manifest-path \
+	    $(srcdir)/third-party/lnav-rs-ext/Cargo.toml --package lnav-rs-ext --release
 	touch $(RUST_DEPS_LIBS)
 
 else
@@ -155,7 +171,7 @@ AM_CPPFLAGS = \
 	-I$(srcdir)/third-party/base64/include \
 	-I$(srcdir)/third-party/date/include \
 	-I$(srcdir)/third-party/notcurses/include \
-	-I$(srcdir)/third-party/prqlc-c \
+	-I$(srcdir)/third-party/lnav-rs-ext \
 	-I$(srcdir)/third-party/rapidyaml \
 	-I$(srcdir)/third-party/hat-trie/include \
 	-I$(top_srcdir)/src/third-party/scnlib/include \
@@ -185,7 +201,6 @@ LDADD = \
 	third-party/base64/lib/libbase64.a \
 	third-party/notcurses/src/lib/liblnavnotcurses.a \
     $(RUST_DEPS_LIBS) \
-	$(CURSES_LIB) \
 	$(SQLITE3_LIBS) \
 	$(LIBARCHIVE_LIBS) \
 	$(LIBCURL) \
@@ -206,16 +221,20 @@ dist_noinst_DATA = \
 	$(CONFIG_FILES) \
 	$(FORMAT_FILES) \
 	$(PRQL_FILES) \
+	$(TERMINFO_FILES) \
 	words.json \
 	xml-entities.json \
 	xterm-palette.json
 
 noinst_HEADERS = \
     third-party/md4c/md4c.h \
-    third-party/prqlc-c/prqlc.h \
-    third-party/prqlc-c/prqlc.hpp \
-    third-party/prqlc-c/prqlc.cxx.hh \
+    third-party/lnav-rs-ext/lnav_ffi.hh \
+    third-party/lnav-rs-ext/lnav_rs_ext.h \
+    third-party/lnav-rs-ext/lnav_rs_ext.hpp \
+    third-party/lnav-rs-ext/lnav_rs_ext.cxx.hh \
+    third-party/lnav-rs-ext/rust/cxx.h \
     third-party/rapidyaml/ryml_all.hpp \
+	all_ids_vtabs.hh \
 	all_logs_vtab.hh \
 	archive_manager.hh \
 	archive_manager.cfg.hh \
@@ -242,6 +261,7 @@ noinst_HEADERS = \
 	dump_internals.hh \
 	elem_to_json.hh \
 	environ_vtab.hh \
+	ext.longpoll.hh \
 	external_editor.hh \
 	external_editor.cfg.hh \
 	external_opener.hh \
@@ -300,11 +320,13 @@ noinst_HEADERS = \
 	log_level_re.re \
 	log_search_table.hh \
 	log_search_table_fwd.hh \
+	log_stmt_vtab.hh \
 	logfile.hh \
 	logfile.cfg.hh \
 	logfile_fwd.hh \
 	logfile_sub_source.hh \
 	logfile_sub_source.cfg.hh \
+	logline_window.hh \
 	mapbox/recursive_wrapper.hpp \
 	mapbox/variant.hpp \
 	mapbox/variant_io.hpp \
@@ -321,6 +343,7 @@ noinst_HEADERS = \
 	pretty_printer.hh \
 	preview_status_source.hh \
 	ptimec.hh \
+	ptimec_spec.hh \
 	readline_callbacks.hh \
 	readline_context.hh \
 	readline_highlighters.hh \
@@ -348,6 +371,7 @@ noinst_HEADERS = \
 	sql_help.hh \
 	sql_util.hh \
 	sqlite-extension-func.hh \
+	src_ref.hh \
 	static_file_vtab.hh \
 	styling.hh \
 	statusview_curses.hh \
@@ -418,7 +442,7 @@ THIRD_PARTY_SRCS = \
     third-party/doctest-root/doctest/doctest.h \
     third-party/intervaltree/IntervalTree.h \
     third-party/md4c/md4c.c \
-    third-party/prqlc-c/prqlc.cxx.cc \
+    third-party/lnav-rs-ext/lnav_rs_ext.cxx.cc \
     third-party/robin_hood/robin_hood.h \
 	third-party/sqlite/ext/dbdump.c \
 	third-party/sqlite/ext/series.c \
@@ -443,9 +467,12 @@ libdiag_a_SOURCES = \
 	breadcrumb_curses.cc \
 	cmd.parser.cc \
 	cmds.bookmarks.cc \
+	cmds.breakpoints.cc \
 	cmds.display.cc \
 	cmds.filtering.cc \
 	cmds.io.cc \
+	cmds.metadata.cc \
+	cmds.scripting.cc \
 	collation-functions.cc \
 	column_namer.cc \
 	command_executor.cc \
@@ -456,6 +483,7 @@ libdiag_a_SOURCES = \
 	dump_internals.cc \
 	elem_to_json.cc \
 	environ_vtab.cc \
+	ext.longpoll.cc \
 	extension-functions.cc \
 	external_editor.cc \
 	external_opener.cc \
@@ -496,8 +524,10 @@ libdiag_a_SOURCES = \
 	log_level.cc \
 	log_level_re.cc \
 	log_search_table.cc \
+	log_stmt_vtab.cc \
 	logfile.cc \
 	logfile_sub_source.cc \
+	logline_window.cc \
 	md2attr_line.cc \
 	md4cpp.cc \
 	msg.text.cc \
@@ -539,6 +569,7 @@ libdiag_a_SOURCES = \
 	sql.formatter.cc \
 	sql_commands.cc \
 	sql_util.cc \
+	src_ref.cc \
 	state-extension-functions.cc \
 	sysclip.cc \
 	textinput_curses.cc \
@@ -561,7 +592,14 @@ libdiag_a_SOURCES = \
 	spookyhash/SpookyV2.cpp
 
 PLUGIN_SRCS = \
+	all_ids_vtabs.cc \
 	file_vtab.cc
+
+if HAVE_WINDRES
+WIN_OBJS = lnavres.$(OBJEXT)
+else
+WIN_OBJS =
+endif
 
 lnav_SOURCES = \
     lnav.cc \
@@ -569,6 +607,8 @@ lnav_SOURCES = \
     lnav.indexing.cc \
     lnav.management_cli.cc \
     $(PLUGIN_SRCS)
+
+lnav_LDADD = $(WIN_OBJS) $(LDADD)
 
 lnav_test_SOURCES = \
     lnav.cc \
@@ -591,10 +631,13 @@ RE2C_FILES = data_scanner_re.cc log_level_re.cc
 endif
 
 EXTRA_DIST = \
-    third-party/prqlc-c/Cargo.lock \
-    third-party/prqlc-c/Cargo.toml \
-    third-party/prqlc-c/cbindgen.toml \
-    third-party/prqlc-c/src/lib.rs \
+    lnav.ico \
+    lnavres.rc \
+    third-party/lnav-rs-ext/Cargo.lock \
+    third-party/lnav-rs-ext/Cargo.toml \
+    third-party/lnav-rs-ext/cbindgen.toml \
+    third-party/lnav-rs-ext/src/lib.rs \
+    third-party/lnav-rs-ext/src/ext_access.rs \
 	ptimec.cc
 
 CLEANFILES = \
@@ -615,6 +658,7 @@ DISTCLEANFILES = \
     help-md.h \
     init-sql.h \
     prql-modules.h \
+    terminfo-files.h \
     time_fmts.h \
     xml-entities-json.h \
     xterm-palette-json.h \
@@ -622,8 +666,8 @@ DISTCLEANFILES = \
 
 if HAVE_CARGO
 clean-local:
-	env CARGO_TARGET_DIR=third-party/prqlc-c/target $(CARGO_CMD) clean --manifest-path \
-    	    $(srcdir)/third-party/prqlc-c/Cargo.toml
+	env CARGO_TARGET_DIR=third-party/lnav-rs-ext/target $(CARGO_CMD) clean --manifest-path \
+    	    $(srcdir)/third-party/lnav-rs-ext/Cargo.toml
 endif
 
 distclean-local:

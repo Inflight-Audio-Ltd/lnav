@@ -81,7 +81,8 @@ struct expressions : public lnav_config_listener {
                                   .with_attr_for_all(
                                       VC_ROLE.value(role_t::VCR_QUOTED_CODE))
                                   .move();
-                readline_sqlite_highlighter(sql_al, std::nullopt);
+                readline_sql_highlighter(
+                    sql_al, lnav::sql::dialect::sqlite, std::nullopt);
                 intern_string_t watch_expr_path = intern_string::lookup(
                     fmt::format(FMT_STRING("/log/watch-expressions/{}/expr"),
                                 pair.first));
@@ -154,8 +155,9 @@ eval_with(logfile& lf, logfile::iterator ll)
                 continue;
             }
             if (strcmp(name, ":log_level") == 0) {
+                auto lvl = ll->get_level_name();
                 sqlite3_bind_text(
-                    stmt, lpc + 1, ll->get_level_name(), -1, SQLITE_STATIC);
+                    stmt, lpc + 1, lvl.data(), lvl.length(), SQLITE_STATIC);
                 continue;
             }
             if (strcmp(name, ":log_time") == 0) {

@@ -65,7 +65,8 @@
     dst[off_inout] = ch; \
     off_inout += 1;
 
-#define ABR_TO_INT(a, b, c) (((a) << 24) | ((b) << 16) | ((c) << 8))
+#define ABR_TO_INT(a, b, c)     (((a) << 24) | ((b) << 16) | ((c) << 8))
+#define ABR_TO_INT4(a, b, c, d) (((a) << 24) | ((b) << 16) | ((c) << 8) | ((d)))
 
 inline bool
 ptime_upto(char ch, const char* str, off_t& off_inout, ssize_t len)
@@ -152,7 +153,9 @@ ptime_b_int(struct exttm* dst, const char* str, off_t off)
 }
 
 #define PTIME_CHECK_b(dst, str, off) \
-    if (!ptime_b_int(dst, str, off)) { \
+    if (str[off + 3] == '.' || isalpha(str[off + 3]) \
+        || !ptime_b_int(dst, str, off)) \
+    { \
         off_t tmp_off = off; \
         if (!ptime_b_slow(dst, str, tmp_off, len)) { \
             off_inout = off; \
@@ -165,7 +168,19 @@ ptime_b_int(struct exttm* dst, const char* str, off_t off)
 inline bool
 ptime_b(exttm* dst, const char* str, off_t& off_inout, ssize_t len)
 {
-    if (off_inout + 3 < len) {
+    // fast path to detect english abbreviated months
+    //
+    // only detect english abbreviated months if they end at a word
+    // boundary. if the abbreviated month in the current locale is longer
+    // than 3 letters, and starts with the same letters as an english locale
+    // month abbreviation, then the computation of off_inout is incorrect.
+    //
+    // Ex: in fr_FR november is `nov.`. Parsing `nov. 29` as `%b %d` fails
+    // if this fast path is taken as later we will attempt to parse `. 29`
+    // as ` %d`.
+    if (off_inout + 3 < len
+        || (str[off_inout + 3] != '.' && !isalpha(str[off_inout + 3])))
+    {
         if (ptime_b_int(dst, str, off_inout)) {
             off_inout += 3;
             return true;
@@ -1022,6 +1037,11 @@ ftime_y(char* dst, off_t& off_inout, ssize_t len, const struct exttm& tm)
     PTIME_APPEND('0' + ((year / 1) % 10));
 }
 
+bool ptime_Z_to_gmtoff(exttm* dst,
+                       const char* str,
+                       off_t& off_inout,
+                       ssize_t len);
+
 inline bool
 ptime_Z_upto(struct exttm* dst,
              const char* str,
@@ -1029,21 +1049,8 @@ ptime_Z_upto(struct exttm* dst,
              ssize_t len,
              char term)
 {
-    auto avail = len - off_inout;
-
-    if (avail >= 3 && str[off_inout + 0] == 'U' && str[off_inout + 1] == 'T'
-        && str[off_inout + 2] == 'C')
-    {
-        PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET | ETF_Z_IS_UTC; });
-        dst->et_gmtoff = 0;
-        return true;
-    }
-    if (avail >= 3 && str[off_inout + 0] == 'G' && str[off_inout + 1] == 'M'
-        && str[off_inout + 2] == 'T')
-    {
-        PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET | ETF_Z_IS_GMT; });
-        dst->et_gmtoff = 0;
-        return true;
+    if (!ptime_Z_to_gmtoff(dst, str, off_inout, len)) {
+        return false;
     }
 
     return ptime_upto(term, str, off_inout, len);
@@ -1055,21 +1062,8 @@ ptime_Z_upto_end(struct exttm* dst,
                  off_t& off_inout,
                  ssize_t len)
 {
-    auto avail = len - off_inout;
-
-    if (avail >= 3 && str[off_inout + 0] == 'U' && str[off_inout + 1] == 'T'
-        && str[off_inout + 2] == 'C')
-    {
-        PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET | ETF_Z_IS_UTC; });
-        dst->et_gmtoff = 0;
-        return true;
-    }
-    if (avail >= 3 && str[off_inout + 0] == 'G' && str[off_inout + 1] == 'M'
-        && str[off_inout + 2] == 'T')
-    {
-        PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET | ETF_Z_IS_GMT; });
-        dst->et_gmtoff = 0;
-        return true;
+    if (!ptime_Z_to_gmtoff(dst, str, off_inout, len)) {
+        return false;
     }
 
     return ptime_upto_end(str, off_inout, len);

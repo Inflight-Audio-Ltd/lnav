@@ -50,7 +50,7 @@ struct compiled_cond_expr {
     bool cce_enabled{true};
 };
 
-struct expressions : public lnav_config_listener {
+struct expressions : lnav_config_listener {
     expressions() : lnav_config_listener(__FILE__) {}
 
     void reload_config(error_reporter& reporter) override
@@ -93,7 +93,8 @@ struct expressions : public lnav_config_listener {
                                   .with_attr_for_all(
                                       VC_ROLE.value(role_t::VCR_QUOTED_CODE))
                                   .move();
-                readline_sqlite_highlighter(sql_al, std::nullopt);
+                readline_sql_highlighter(
+                    sql_al, lnav::sql::dialect::sqlite, std::nullopt);
                 intern_string_t cond_expr_path = intern_string::lookup(
                     fmt::format(FMT_STRING("/log/annotations/{}/condition"),
                                 pair.first));
@@ -130,7 +131,7 @@ applicable(vis_line_t vl)
     auto ld = lss.find_data(cl);
     log_data_helper ldh(lss);
 
-    ldh.parse_line(vl, true);
+    ldh.load_line(vl, true);
     for (auto& expr : exprs.e_cond_exprs) {
         if (!expr.second.cce_enabled) {
             continue;
@@ -163,7 +164,7 @@ apply(vis_line_t vl, std::vector<intern_string_t> annos)
     logmsg_annotations la;
     log_data_helper ldh(lss);
 
-    if (!ldh.parse_line(vl, true)) {
+    if (!ldh.load_line(vl, true)) {
         log_error("failed to parse line %d", vl);
         return Err(lnav::console::user_message::error("Failed to parse line"));
     }
@@ -225,6 +226,36 @@ apply(vis_line_t vl, std::vector<intern_string_t> annos)
         auto iter = cfg.a_definitions.find(anno);
         if (iter == cfg.a_definitions.end()) {
             log_error("unknown annotation: %s", anno.c_str());
+            continue;
+        }
+
+        if (startswith(iter->second.a_handler.pp_value, "|")) {
+            intern_string_t handler_path = intern_string::lookup(
+                fmt::format(FMT_STRING("/log/annotations/{}/handler"), anno));
+            logline_value_vector values;
+            exec_context ec(&values, internal_sql_callback, pipe_callback);
+            db_label_source anno_label_source;
+
+            ec.with_perms(exec_context::perm_t::READ_ONLY);
+            ec.ec_local_vars.push(std::map<std::string, scoped_value_t>());
+            ec.ec_top_line = vl;
+            auto src_guard = ec.enter_db_source(&anno_label_source);
+            auto src_loc = source_location{handler_path};
+
+            auto exec_res
+                = ec.execute(src_loc, iter->second.a_handler.pp_value);
+            if (exec_res.isErr()) {
+                auto err_msg = exec_res.unwrapErr();
+
+                la.la_pairs[anno.to_string()]
+                    = err_msg.to_attr_line().al_string;
+            } else {
+                auto content = exec_res.unwrap();
+                la.la_pairs[anno.to_string()] = content;
+            }
+
+            lnav_data.ld_views[LNV_LOG].reload_data();
+            lnav_data.ld_views[LNV_LOG].set_needs_update();
             continue;
         }
 

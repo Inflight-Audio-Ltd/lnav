@@ -48,10 +48,139 @@ ptime_b_slow(struct exttm* dst, const char* str, off_t& off_inout, ssize_t len)
     zone[zone_len] = '\0';
     if ((end_of_date = strptime(zone, "%b", &dst->et_tm)) != NULL) {
         off_inout += end_of_date - zone;
+        // Some formats append a dot, maybe to align a 3 letter abbrev with the
+        // four letter ones?
+        if (off_inout + 1 < len && zone[off_inout] == '.') {
+            off_inout += 1;
+        }
+        dst->et_flags |= ETF_MONTH_SET;
         return true;
     }
 
     return false;
+}
+
+bool
+ptime_Z_to_gmtoff(exttm* dst, const char* str, off_t& off_inout, ssize_t len)
+{
+    auto avail = len - off_inout;
+
+    if (avail < 3) {
+        return false;
+    }
+
+    auto zone_start = (unsigned char*) &str[off_inout];
+    uint32_t zone_int = ABR_TO_INT4(zone_start[0] & ~0x20UL,
+                                    zone_start[1] & ~0x20UL,
+                                    zone_start[2] & ~0x20UL,
+                                    avail >= 4 ? zone_start[3] & ~0x20UL : 0);
+    switch (zone_int) {
+        case ABR_TO_INT('U', 'T', 'C'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET | ETF_Z_IS_UTC; });
+            dst->et_gmtoff = 0;
+            break;
+        case ABR_TO_INT('G', 'M', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET | ETF_Z_IS_GMT; });
+            dst->et_gmtoff = 0;
+            break;
+        case ABR_TO_INT('E', 'A', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 3 * 60 * 60;
+            break;
+        case ABR_TO_INT('W', 'A', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 1 * 60 * 60;
+            break;
+        case ABR_TO_INT('C', 'E', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 1 * 60 * 60;
+            break;
+        case ABR_TO_INT('C', 'A', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 2 * 60 * 60;
+            break;
+        case ABR_TO_INT4('C', 'E', 'D', 'T'):
+        case ABR_TO_INT4('C', 'E', 'S', 'T'):
+            PTIME_CONSUME(4, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 2 * 60 * 60;
+            break;
+        case ABR_TO_INT('M', 'S', 'K'):
+        case ABR_TO_INT('I', 'D', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 3 * 60 * 60;
+            break;
+        case ABR_TO_INT('I', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 5 * 60 * 60 + 30 * 60;
+            break;
+        case ABR_TO_INT('H', 'K', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 8 * 60 * 60;
+            break;
+        case ABR_TO_INT('J', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 9 * 60 * 60;
+            break;
+        case ABR_TO_INT('K', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = 9 * 60 * 60;
+            break;
+        case ABR_TO_INT('N', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -3 * 60 * 60 + 30 * 60;
+            break;
+        case ABR_TO_INT('N', 'D', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -2 * 60 * 60 + 30 * 60;
+            break;
+        case ABR_TO_INT('E', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -5 * 60 * 60;
+            break;
+        case ABR_TO_INT('E', 'D', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -4 * 60 * 60;
+            break;
+        case ABR_TO_INT('C', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -6 * 60 * 60;
+            break;
+        case ABR_TO_INT('C', 'D', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -5 * 60 * 60;
+            break;
+        case ABR_TO_INT('M', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -7 * 60 * 60;
+            break;
+        case ABR_TO_INT('M', 'D', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -6 * 60 * 60;
+            break;
+        case ABR_TO_INT('P', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -8 * 60 * 60;
+            break;
+        case ABR_TO_INT('P', 'D', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -7 * 60 * 60;
+            break;
+        case ABR_TO_INT('H', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -10 * 60 * 60;
+            break;
+        case ABR_TO_INT('A', 'S', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -4 * 60 * 60;
+            break;
+        case ABR_TO_INT('A', 'D', 'T'):
+            PTIME_CONSUME(3, { dst->et_flags |= ETF_ZONE_SET; });
+            dst->et_gmtoff = -3 * 60 * 60;
+            break;
+        default:
+            return false;
+    }
+    return true;
 }
 
 #define FMT_CASE(ch, c) \

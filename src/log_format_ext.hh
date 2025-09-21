@@ -110,6 +110,9 @@ public:
         int p_opid_field_index{-1};
         int p_subid_field_index{-1};
         int p_body_field_index{-1};
+        int p_thread_id_field_index{-1};
+        int p_src_file_field_index{-1};
+        int p_src_line_field_index{-1};
         int p_timestamp_end{-1};
         bool p_module_format{false};
         std::set<size_t> p_matched_samples;
@@ -182,7 +185,7 @@ public:
 
     void get_subline(const logline& ll,
                      shared_buffer_ref& sbr,
-                     bool full_message) override;
+                     subline_options opts) override;
 
     std::shared_ptr<log_vtab_impl> get_vtab_impl() const override;
 
@@ -349,6 +352,9 @@ public:
     intern_string_t elf_module_id_field;
     intern_string_t elf_opid_field;
     intern_string_t elf_subid_field;
+    intern_string_t elf_thread_id_field;
+    intern_string_t elf_src_file_field;
+    intern_string_t elf_src_line_field;
     std::map<log_level_t, level_pattern> elf_level_patterns;
     std::vector<std::pair<int64_t, log_level_t>> elf_level_pairs;
     bool elf_container{false};
@@ -436,8 +442,7 @@ public:
 
     void json_append(const json_format_element& jfe,
                      const value_def* vd,
-                     const char* value,
-                     ssize_t len);
+                     const string_fragment& sf);
 
     logline_value_meta get_value_meta(intern_string_t field_name,
                                       value_kind_t kind);
@@ -455,7 +460,7 @@ public:
 
     off_t jlf_cached_offset{-1};
     line_range jlf_cached_sub_range;
-    bool jlf_cached_full{false};
+    subline_options jlf_cached_opts{};
     std::vector<off_t> jlf_line_offsets;
     std::vector<char> jlf_cached_line;
     string_attrs_t jlf_line_attrs;

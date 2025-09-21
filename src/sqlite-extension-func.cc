@@ -29,13 +29,17 @@
  * @file sqlite-extension-func.c
  */
 
+#include "config.h"
+
+#include <map>
+#include <string>
+
 #include "sqlite-extension-func.hh"
 
 #include "base/auto_mem.hh"
 #include "base/itertools.hh"
 #include "base/lnav_log.hh"
 #include "base/string_util.hh"
-#include "config.h"
 #include "help_text.hh"
 #include "sql_help.hh"
 
@@ -49,15 +53,13 @@ int sqlite3_series_init(sqlite3* db,
 }
 
 #ifdef HAVE_RUST_DEPS
-rust::Vec<prqlc::SourceTreeElement> sqlite_extension_prql;
+rust::Vec<lnav_rs_ext::SourceTreeElement> sqlite_extension_prql;
 #endif
 
-namespace lnav {
-namespace sql {
+namespace lnav::sql {
 std::multimap<std::string, const help_text*> prql_functions;
 
 }
-}  // namespace lnav
 
 sqlite_registration_func_t sqlite_registration_funcs[] = {
     common_extension_functions,
@@ -154,7 +156,7 @@ insert_sql_help(help_text& root, const help_text& curr)
             insert_sql_help(root, param);
         }
         for (const auto& eval : param.ht_enum_values) {
-            sqlite_function_help.emplace(eval, &root);
+            sqlite_function_help.emplace(eval.to_string(), &root);
         }
     }
 }
@@ -243,7 +245,7 @@ register_sqlite_funcs(sqlite3* db, sqlite_registration_func_t* reg_funcs)
             std::string content;
 
             mod_pair.second.to_string(content);
-            sqlite_extension_prql.emplace_back(prqlc::SourceTreeElement{
+            sqlite_extension_prql.emplace_back(lnav_rs_ext::SourceTreeElement{
                 fmt::format(FMT_STRING("{}.prql"), mod_pair.first),
                 content,
             });
@@ -1459,7 +1461,7 @@ register_sqlite_funcs(sqlite3* db, sqlite_registration_func_t* reg_funcs)
             .sql_keyword()
             .with_parameter(help_text("filter", "Additional processing of rows")
                                 .optional()
-                                .with_enum_values({"DISTINCT", "ALL"}))
+                                .with_enum_values({"DISTINCT"_frag, "ALL"_frag}))
             .with_parameter(
                 help_text(
                     "result-column",
@@ -1611,10 +1613,10 @@ register_sqlite_funcs(sqlite3* db, sqlite_registration_func_t* reg_funcs)
             .sql_infix()
             .with_parameter(help_text("nullness")
                                 .with_enum_values({
-                                    "ISNULL",
-                                    "NOTNULL",
-                                    "NOT NULL",
-                                    "IS NOT NULL",
+                                    "ISNULL"_frag,
+                                    "NOTNULL"_frag,
+                                    "NOT NULL"_frag,
+                                    "IS NOT NULL"_frag,
                                 })
                                 .optional())
             .with_example({
@@ -1670,11 +1672,11 @@ register_sqlite_funcs(sqlite3* db, sqlite_registration_func_t* reg_funcs)
             .with_parameter(
                 help_text("direction", "The direction, ASCending or DESCending")
                     .optional()
-                    .with_enum_values({"ASC", "DESC"}))
+                    .with_enum_values({"ASC"_frag, "DESC"_frag}))
             .with_parameter(
                 help_text("null-handling")
                     .optional()
-                    .with_enum_values({"NULLS FIRST", "NULLS LAST"})),
+                    .with_enum_values({"NULLS FIRST"_frag, "NULLS LAST"_frag})),
 
         help_text("select-stmt")
             .with_summary(

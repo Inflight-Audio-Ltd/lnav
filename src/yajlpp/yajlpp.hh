@@ -32,6 +32,7 @@
 #ifndef yajlpp_hh
 #define yajlpp_hh
 
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -204,12 +205,14 @@ struct typed_json_path_container;
 struct json_path_handler_base {
     struct enum_value_t {
         template<typename T>
-        enum_value_t(const char* name, T value)
+        constexpr enum_value_t(string_fragment name, T value)
             : first(name), second((int) value)
         {
         }
 
-        const char* first;
+        constexpr enum_value_t() : second(0) {}
+
+        string_fragment first;
         int second;
     };
 
@@ -227,18 +230,18 @@ struct json_path_handler_base {
     bool is_array() const { return this->jph_is_array; }
 
     std::optional<int> to_enum_value(const string_fragment& sf) const;
-    const char* to_enum_string(int value) const;
+    string_fragment to_enum_string(int value) const;
 
     template<typename T>
-    std::enable_if_t<!detail::is_optional<T>::value, const char*>
+    std::enable_if_t<!detail::is_optional<T>::value, string_fragment>
     to_enum_string(T value) const
     {
         return this->to_enum_string((int) value);
     }
 
     template<typename T>
-    std::enable_if_t<detail::is_optional<T>::value, const char*> to_enum_string(
-        T value) const
+    std::enable_if_t<detail::is_optional<T>::value, string_fragment>
+    to_enum_string(T value) const
     {
         return this->to_enum_string((int) value.value());
     }
@@ -326,6 +329,10 @@ struct json_path_handler_base {
     attr_line_t get_help_text(const std::string& full_path) const;
     attr_line_t get_help_text(yajlpp_parse_context* ypc) const;
 };
+
+constexpr json_path_handler_base::enum_value_t
+    json_path_handler_base::ENUM_TERMINATOR
+    = {};
 
 struct json_path_handler;
 
@@ -544,6 +551,11 @@ public:
     yajl_gen_status operator()(const std::string& str)
     {
         return yajl_gen_string(this->yg_handle, str);
+    }
+
+    yajl_gen_status operator()(const std::filesystem::path& path)
+    {
+        return yajl_gen_string(this->yg_handle, path.string());
     }
 
     yajl_gen_status operator()(const char* str)

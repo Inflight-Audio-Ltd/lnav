@@ -12,10 +12,13 @@ check_include_file("util.h" HAVE_UTIL_H)
 check_include_file("execinfo.h" HAVE_EXECINFO_H)
 check_include_file("libproc.h" HAVE_LIBPROC_H)
 
-set(VCS_PACKAGE_STRING "lnav ${CMAKE_PROJECT_VERSION}")
+set(PACKAGE "${CMAKE_PROJECT_NAME}")
+set(PACKAGE_URL "${CMAKE_PROJECT_HOMEPAGE_URL}")
+set(VCS_PACKAGE_STRING "${CMAKE_PROJECT_NAME} ${CMAKE_PROJECT_VERSION}")
 set(PACKAGE_VERSION "${CMAKE_PROJECT_VERSION}")
 
 configure_file(config.cmake.h.in config.h)
+configure_file(help.md.in help.md)
 
 add_subdirectory(base)
 add_subdirectory(pcrepp)
@@ -122,6 +125,7 @@ set(TIME_FORMATS
         "%m.%d %H:%M:%S"
         "%m%d %H:%M:%S"
         "%y%m%d %H%M%S"
+        "%y%m%d %H:%M:%S"
         "%Y%m%d %H:%M:%S"
         "%Y%m%d.%H%M%S"
         "%H:%M:%S"
@@ -141,7 +145,7 @@ add_custom_command(
         DEPENDS ptimec
         COMMAND ptimec ${TIME_FORMATS} > time_fmts.cc)
 
-add_library(lnavdt STATIC config.h.in ptimec.hh ptimec_rt.cc time_fmts.cc)
+add_library(lnavdt STATIC config.h.in ptimec.hh ptimec_spec.hh ptimec_rt.cc time_fmts.cc)
 target_include_directories(lnavdt PUBLIC . ${CMAKE_CURRENT_BINARY_DIR} third-party/date/include)
 
 function(bin2c)
@@ -154,11 +158,21 @@ function(bin2c)
             DEPENDS bin2c "${FILE_TO_LINK}")
 endfunction(bin2c)
 
-foreach (FILE_TO_LINK animals.json ansi-palette.json css-color-names.json diseases.json emojis.json xml-entities.json xterm-palette.json help.md init.sql words.json)
+foreach (FILE_TO_LINK animals.json ansi-palette.json css-color-names.json diseases.json emojis.json xml-entities.json xterm-palette.json init.sql words.json)
     string(REPLACE "." "-" DST_FILE "${FILE_TO_LINK}")
     add_custom_command(
             OUTPUT "${DST_FILE}.h" "${DST_FILE}.cc"
             COMMAND bin2c "${DST_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILE_TO_LINK}"
+            DEPENDS bin2c "${FILE_TO_LINK}")
+    list(APPEND GEN_SRCS "${CMAKE_CURRENT_BINARY_DIR}/${DST_FILE}.h"
+            "${CMAKE_CURRENT_BINARY_DIR}/${DST_FILE}.cc")
+endforeach (FILE_TO_LINK)
+
+foreach (FILE_TO_LINK help.md)
+    string(REPLACE "." "-" DST_FILE "${FILE_TO_LINK}")
+    add_custom_command(
+            OUTPUT "${DST_FILE}.h" "${DST_FILE}.cc"
+            COMMAND bin2c "${DST_FILE}" "${FILE_TO_LINK}"
             DEPENDS bin2c "${FILE_TO_LINK}")
     list(APPEND GEN_SRCS "${CMAKE_CURRENT_BINARY_DIR}/${DST_FILE}.h"
             "${CMAKE_CURRENT_BINARY_DIR}/${DST_FILE}.cc")
@@ -187,7 +201,10 @@ set(FORMAT_FILES
         formats/java_log.json
         formats/journald_json_log.json
         formats/katello_log.json
+        formats/laravel_log.json
         formats/lnav_debug_log.json
+        formats/mysql_error_log.json
+        formats/mysql_slow_log.json
         formats/nextcloud_log.json
         formats/nextflow_log.json
         formats/openam_log.json
@@ -195,6 +212,7 @@ set(FORMAT_FILES
         formats/openstack_log.json
         formats/page_log.json
         formats/pcap_log.json
+        formats/postgres_log.json
         formats/procstate_log.json
         formats/proxifier_log.json
         formats/redis_log.json
@@ -267,6 +285,30 @@ add_custom_command(
         COMMAND bin2c -n lnav_config_json default-config ${CONFIG_FILE_PATHS}
         DEPENDS bin2c ${CONFIG_FILES})
 list(APPEND GEN_SRCS default-config.h default-config.cc)
+
+set(TERMINFO_FILES
+        terminfos/ansi
+        terminfos/cygwin
+        terminfos/Eterm
+        terminfos/Eterm-256color
+        terminfos/screen
+        terminfos/screen-16color
+        terminfos/screen-256color
+        terminfos/tmux
+        terminfos/tmux-256color
+        terminfos/xterm
+        terminfos/xterm-256color
+)
+
+set(TERMINFO_FILE_PATHS ${TERMINFO_FILES})
+
+list(TRANSFORM TERMINFO_FILE_PATHS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+
+add_custom_command(
+        OUTPUT terminfo-files.h terminfo-files.cc
+        COMMAND bin2c -n lnav_terminfo_files terminfo-files ${TERMINFO_FILE_PATHS}
+        DEPENDS bin2c ${TERMINFO_FILES})
+list(APPEND GEN_SRCS terminfo-files.h terminfo-files.cc)
 
 set(BUILTIN_LNAV_SCRIPTS
         scripts/dhclient-summary.lnav
@@ -373,6 +415,7 @@ add_library(
         third-party/notcurses/src/compat/compat.c
         third-party/notcurses/src/lib/automaton.c
         third-party/notcurses/src/lib/blit.c
+        third-party/notcurses/src/lib/capabilities.c
         third-party/notcurses/src/lib/debug.c
         third-party/notcurses/src/lib/direct.c
         third-party/notcurses/src/lib/fade.c
@@ -398,6 +441,7 @@ add_library(
         third-party/notcurses/src/lib/stats.c
         third-party/notcurses/src/lib/tabbed.c
         third-party/notcurses/src/lib/termdesc.c
+        third-party/notcurses/src/lib/terminfo.c
         third-party/notcurses/src/lib/tree.c
         third-party/notcurses/src/lib/unixsig.c
         third-party/notcurses/src/lib/util.c
@@ -448,9 +492,12 @@ add_library(
         breadcrumb_curses.cc
         cmd.parser.cc
         cmds.bookmarks.cc
+        cmds.breakpoints.cc
         cmds.display.cc
         cmds.filtering.cc
         cmds.io.cc
+        cmds.metadata.cc
+        cmds.scripting.cc
         collation-functions.cc
         column_namer.cc
         command_executor.cc
@@ -460,6 +507,7 @@ add_library(
         dump_internals.cc
         elem_to_json.cc
         environ_vtab.cc
+        ext.longpoll.cc
         extension-functions.cc
         external_editor.cc
         external_opener.cc
@@ -468,7 +516,6 @@ add_library(
         file_converter_manager.cc
         file_format.cc
         file_options.cc
-        file_vtab.cc
         files_sub_source.cc
         filter_observer.cc
         filter_status_source.cc
@@ -500,8 +547,10 @@ add_library(
         log_format.cc
         log_format_loader.cc
         log_search_table.cc
+        log_stmt_vtab.cc
         logfile.cc
         logfile_sub_source.cc
+        logline_window.cc
         md2attr_line.cc
         md4cpp.cc
         msg.text.cc
@@ -528,6 +577,7 @@ add_library(
         sequence_matcher.cc
         shlex.cc
         sqlite-extension-func.cc
+        src_ref.cc
         static_file_vtab.cc
         statusview_curses.cc
         string-extension-functions.cc
@@ -568,6 +618,7 @@ add_library(
         third-party/sqlite/ext/series.c
         third-party/sqlite/ext/dbdump.c
 
+        all_ids_vtabs.hh
         all_logs_vtab.hh
         archive_manager.hh
         archive_manager.cfg.hh
@@ -588,6 +639,7 @@ add_library(
         doc_status_source.hh
         dump_internals.hh
         elem_to_json.hh
+        ext.longpoll.hh
         external_editor.hh
         external_editor.cfg.hh
         external_opener.hh
@@ -633,10 +685,12 @@ add_library(
         log_gutter_source.hh
         log_search_table.hh
         log_search_table_fwd.hh
+        log_stmt_vtab.hh
         logfile_sub_source.cfg.hh
         logfile.hh
         logfile_fwd.hh
         logfile_stats.hh
+        logline_window.hh
         md2attr_line.hh
         md4cpp.hh
         msg.text.hh
@@ -672,6 +726,7 @@ add_library(
         sql_execute.hh
         sql_help.hh
         sql_util.hh
+        src_ref.hh
         static_file_vtab.hh
         strong_int.hh
         sysclip.hh
@@ -748,8 +803,8 @@ add_library(
 
         third-party/robin_hood/robin_hood.h
 
-        third-party/prqlc-c/prqlc.cxx.hh
-        third-party/prqlc-c/prqlc.cxx.cc
+        third-party/lnav-rs-ext/lnav_rs_ext.cxx.hh
+        third-party/lnav-rs-ext/lnav_rs_ext.cxx.cc
 
         third-party/tlx/die/core.hpp
         third-party/tlx/container/btree.hpp
@@ -767,18 +822,29 @@ add_library(
         third-party/hat-trie/include/tsl/array-hash/array_set.h
 )
 
-set(lnav_SRCS lnav.cc)
+set(lnav_SRCS lnav.cc file_vtab.cc all_ids_vtabs.cc)
 
 target_include_directories(diag PUBLIC . fmtlib ${CMAKE_CURRENT_BINARY_DIR}
         third-party
         third-party/base64/include
         third-party/date/include
-        third-party/prqlc-c
+        third-party/lnav-rs-ext
         third-party/rapidyaml
         third-party/hat-trie/include
         ${CURSES_INCLUDE_DIRS}
 )
 target_compile_options(diag PRIVATE ${CURSES_CFLAGS})
+
+add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/target/release/liblnav_rs_ext.a
+        COMMAND env CARGO_TARGET_DIR=target cargo build --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/third-party/lnav-rs-ext/Cargo.toml --package lnav-rs-ext --release
+        DEPENDS third-party/lnav-rs-ext/src/lib.rs third-party/lnav-rs-ext/src/ext_access.rs
+)
+add_custom_target(
+        lnav_rs_ext
+        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/target/release/liblnav_rs_ext.a
+)
+add_dependencies(diag lnav_rs_ext)
 
 target_link_libraries(
         diag
@@ -797,6 +863,7 @@ target_link_libraries(
         base64
         spookyhash
         ${lnav_LIBS}
+        ${CMAKE_CURRENT_BINARY_DIR}/target/release/liblnav_rs_ext.a
 )
 target_compile_definitions(diag PRIVATE SQLITE_OMIT_LOAD_EXTENSION)
 

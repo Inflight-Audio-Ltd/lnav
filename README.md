@@ -66,7 +66,7 @@ you the basics of operation:
 
 ## Installation
 
-[Download a statically-linked binary for Linux/MacOS from the release page](https://github.com/tstack/lnav/releases/latest#release-artifacts)
+[Download a statically-linked binary for Linux/MacOS/Windows from the release page](https://github.com/tstack/lnav/releases/latest#release-artifacts)
 
 ### Brew on MacOS
 
@@ -176,7 +176,6 @@ The following software packages are required to build lnav:
 - gcc/clang    - A C++14-compatible compiler.
 - libpcre2     - The Perl Compatible Regular Expression v2 (PCRE2) library.
 - sqlite       - The SQLite database engine.  Version 3.9.0 or higher is required.
-- ncurses      - The ncurses text UI library.
 - zlib         - The zlib compression library.
 - bz2          - The bzip2 compression library.
 - libcurl      - The cURL library for downloading files from URLs.  Version 7.23.0 or higher is required.
@@ -201,3 +200,12 @@ $ sudo make install
 
 [Angle-grinder](https://github.com/rcoh/angle-grinder) is a tool to slice and dice log files on the command-line.
 If you're familiar with the SumoLogic query language, you might find this tool more comfortable to work with.
+
+## Code Signing Policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+
+This program will not transfer any information to other networked systems
+unless specifically requested by the user or the person installing or
+operating it.

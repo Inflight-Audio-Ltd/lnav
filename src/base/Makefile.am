@@ -34,6 +34,7 @@ noinst_HEADERS = \
     color_spaces.hh \
     date_time_scanner.cfg.hh \
     date_time_scanner.hh \
+    distributed_slice.hh \
     enum_util.hh \
     file_range.hh \
     from_trait.hh \
@@ -70,6 +71,7 @@ noinst_HEADERS = \
     progress.hh \
     result.h \
     short_alloc.h \
+    small_string_map.hh \
     snippet_highlighters.hh \
     string_attr_type.hh \
     string_util.hh \
@@ -96,11 +98,13 @@ libbase_a_SOURCES = \
     is_utf8.cc \
     isc.cc \
     lnav.console.cc \
+    lnav.console.win.cc \
     lnav.gzip.cc \
     lnav_log.cc \
     network.tcp.cc \
     paths.cc \
     piper.file.cc \
+    small_string_map.cc \
     snippet_highlighters.cc \
     string_attr_type.cc \
     string_util.cc \
@@ -122,6 +126,7 @@ test_base_SOURCES = \
     intern_string.tests.cc \
     lnav.gzip.tests.cc \
     math_util.tests.cc \
+    small_string_map.tests.cc \
     string_util.tests.cc \
     test_base.cc
 

@@ -32,6 +32,7 @@
 #ifndef textview_curses_hh
 #define textview_curses_hh
 
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -40,6 +41,7 @@
 #include "bookmarks.hh"
 #include "breadcrumb.hh"
 #include "grep_proc.hh"
+#include "hasher.hh"
 #include "highlighter.hh"
 #include "listview_curses.hh"
 #include "lnav_config_fwd.hh"
@@ -52,6 +54,7 @@
 
 class textview_curses;
 
+using vis_bookmarks_t = bookmarks<vis_line_t>;
 using vis_bookmarks = bookmarks<vis_line_t>::type;
 
 class logfile_filter_state {
@@ -226,6 +229,7 @@ public:
         while (!this->fs_filters.empty()) {
             this->fs_filters.pop_back();
         }
+        this->fs_generation += 1;
     }
 
     void set_filter_enabled(const std::shared_ptr<text_filter>& filter,
@@ -236,6 +240,7 @@ public:
         } else {
             filter->disable();
         }
+        this->fs_generation += 1;
     }
 
     std::shared_ptr<text_filter> get_filter(const std::string& id);
@@ -245,6 +250,8 @@ public:
     void get_mask(uint32_t& filter_mask);
 
     void get_enabled_mask(uint32_t& filter_in_mask, uint32_t& filter_out_mask);
+
+    uint32_t fs_generation{0};
 
 private:
     const size_t fs_reserved;
@@ -531,6 +538,8 @@ public:
     virtual int get_filtered_count() const { return 0; }
 
     virtual int get_filtered_count_for(size_t filter_index) const { return 0; }
+
+    virtual void update_filter_hash_state(hasher& h) const;
 
     virtual text_format_t get_text_format() const
     {
@@ -878,6 +887,8 @@ public:
                           const line_range& body,
                           const line_range& orig_line);
 
+    void update_hash_state(hasher& h) const;
+
     bool tc_interactive{false};
     std::function<void(textview_curses&)> tc_state_event_handler;
 
@@ -896,6 +907,7 @@ public:
     std::optional<selected_text_info> tc_selected_text;
     bool tc_text_selection_active{false};
     display_line_content_t tc_press_line;
+    std::optional<vis_line_t> tc_selection_at_press;
     int tc_press_left{0};
     std::function<void(textview_curses&, const attr_line_t&, int x)>
         tc_on_click;
@@ -933,7 +945,7 @@ protected:
     text_sub_source* tc_sub_source{nullptr};
     std::shared_ptr<text_delegate> tc_delegate;
 
-    vis_bookmarks tc_bookmarks;
+    vis_bookmarks tc_bookmarks{vis_bookmarks_t::create_array()};
 
     int tc_searching{0};
     struct timeval tc_follow_deadline{0, 0};

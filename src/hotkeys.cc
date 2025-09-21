@@ -42,7 +42,9 @@
 #include "field_overlay_source.hh"
 #include "lnav.hh"
 #include "lnav.prompt.hh"
+#include "lnav_commands.hh"
 #include "lnav_config.hh"
+#include "logline_window.hh"
 #include "shlex.hh"
 #include "sql_util.hh"
 #include "sqlitepp.client.hh"
@@ -69,6 +71,7 @@ handle_keyseq(const char* keyseq)
     ec.ec_global_vars = lnav_data.ld_exec_context.ec_global_vars;
     ec.ec_msg_callback_stack = lnav_data.ld_exec_context.ec_msg_callback_stack;
     ec.ec_ui_callbacks = lnav_data.ld_exec_context.ec_ui_callbacks;
+    auto provguard = ec.with_provenance(exec_context::keyboard_input{});
     var_stack.push(std::map<std::string, scoped_value_t>());
     // XXX push another so it doesn't look like interactive use
     var_stack.push(std::map<std::string, scoped_value_t>());
@@ -176,17 +179,22 @@ handle_paging_key(notcurses* nc, const ncinput& ch, const char* keyseq)
         return true;
     }
 
+    if (ch.id == NCKEY_EOF) {
+        lnav_data.ld_looping = false;
+        return true;
+    }
+
     if (tc->get_overlay_selection()) {
         if (tc->handle_key(ch)) {
             return true;
         }
     }
 
-    if (handle_keyseq(keyseq)) {
+    if (tc->handle_key(ch)) {
         return true;
     }
 
-    if (tc->handle_key(ch)) {
+    if (handle_keyseq(keyseq)) {
         return true;
     }
 
@@ -340,11 +348,10 @@ DELETE FROM lnav_user_notifications WHERE id = 'org.lnav.mouse-support'
             if ((lnav_data.ld_zoom_level - 1) < 0) {
                 alerter::singleton().chime("maximum zoom-in level reached");
             } else {
-                ec.execute(
-                    INTERNAL_SRC_LOC,
-                    fmt::format(
-                        FMT_STRING(":zoom-to {}"),
-                        +lnav_zoom_strings[lnav_data.ld_zoom_level - 1]));
+                ec.execute(INTERNAL_SRC_LOC,
+                           fmt::format(
+                               FMT_STRING(":zoom-to {}"),
+                               lnav_zoom_strings[lnav_data.ld_zoom_level - 1]));
             }
             break;
 
@@ -352,11 +359,10 @@ DELETE FROM lnav_user_notifications WHERE id = 'org.lnav.mouse-support'
             if ((lnav_data.ld_zoom_level + 1) >= ZOOM_COUNT) {
                 alerter::singleton().chime("maximum zoom-out level reached");
             } else {
-                ec.execute(
-                    INTERNAL_SRC_LOC,
-                    fmt::format(
-                        FMT_STRING(":zoom-to {}"),
-                        +lnav_zoom_strings[lnav_data.ld_zoom_level + 1]));
+                ec.execute(INTERNAL_SRC_LOC,
+                           fmt::format(
+                               FMT_STRING(":zoom-to {}"),
+                               lnav_zoom_strings[lnav_data.ld_zoom_level + 1]));
             }
             break;
 
@@ -630,7 +636,7 @@ DELETE FROM lnav_user_notifications WHERE id = 'org.lnav.mouse-support'
         case 'O':
             if (sel && lss != nullptr && lss->text_line_count() > 0) {
                 auto start_win = lss->window_at(sel.value());
-                auto start_win_iter = start_win.begin();
+                auto start_win_iter = start_win->begin();
                 const auto& opid_opt
                     = start_win_iter->get_values().lvv_opid_value;
                 if (!opid_opt) {
@@ -645,13 +651,13 @@ DELETE FROM lnav_user_notifications WHERE id = 'org.lnav.mouse-support'
                     unsigned int opid_hash = start_line.get_opid();
                     auto next_win
                         = lss->window_to_end(start_win_iter->get_vis_line());
-                    auto next_win_iter = next_win.begin();
+                    auto next_win_iter = next_win->begin();
                     bool found = false;
 
                     while (true) {
                         if (ch.id == 'o') {
                             ++next_win_iter;
-                            if (next_win_iter == next_win.end()) {
+                            if (next_win_iter == next_win->end()) {
                                 break;
                             }
                         } else {
@@ -693,7 +699,16 @@ DELETE FROM lnav_user_notifications WHERE id = 'org.lnav.mouse-support'
             break;
 
         case 't':
-            if (lnav_data.ld_text_source.current_file() == nullptr) {
+            if (lnav_data.ld_view_stack.size() == 2
+                && lnav_data.ld_log_source.file_count() == 0
+                && lnav_data.ld_view_stack.top().value_or(nullptr)
+                    == &lnav_data.ld_views[LNV_TEXT])
+            {
+                prompt.p_editor.set_inactive_value(
+                    lnav::console::user_message::info(
+                        "Already in the TEXT view")
+                        .to_attr_line());
+            } else if (lnav_data.ld_text_source.current_file() == nullptr) {
                 alerter::singleton().chime("No text files loaded");
                 prompt.p_editor.set_inactive_value(
                     lnav::console::user_message::error("No text files loaded")

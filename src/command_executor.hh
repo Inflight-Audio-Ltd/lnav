@@ -130,17 +130,32 @@ struct exec_context {
         return retval;
     }
 
+    void set_output_format(text_format_t tf)
+    {
+        if (!this->ec_output_stack.empty()
+            && this->ec_output_stack.back().od_format
+                == text_format_t::TF_UNKNOWN)
+        {
+            this->ec_output_stack.back().od_format = tf;
+        }
+    }
+
     void set_output(const std::string& name, FILE* file, int (*closer)(FILE*));
 
     void clear_output();
 
     struct mouse_input {};
+    struct keyboard_input {};
     struct user {};
     struct file_open {
         std::string fo_name;
     };
+    struct external_access {
+        std::string ea_src;
+    };
 
-    using provenance_t = mapbox::util::variant<user, mouse_input, file_open>;
+    using provenance_t = mapbox::util::
+        variant<user, keyboard_input, mouse_input, file_open, external_access>;
 
     struct provenance_guard {
         explicit provenance_guard(exec_context* context, provenance_t prov)

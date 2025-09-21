@@ -80,7 +80,7 @@ enum class ln_mode_t : int {
     BUSY,
 };
 
-extern const std::array<const char*, LNV__MAX> lnav_view_strings;
+extern const std::array<string_fragment, LNV__MAX> lnav_view_strings;
 extern const char* const lnav_view_titles[LNV__MAX];
 extern const char* const
     lnav_mode_strings[lnav::enums::to_underlying(ln_mode_t::BUSY) + 1];
@@ -107,6 +107,8 @@ bool moveto_cluster(std::optional<vis_line_t> (bookmark_vector<vis_line_t>::*f)(
                     vis_line_t top);
 vis_line_t search_forward_from(textview_curses* tc);
 textview_curses* get_textview_for_mode(ln_mode_t mode);
+
+std::vector<view_curses*> all_views();
 
 class lnav_behavior : public mouse_behavior {
 public:

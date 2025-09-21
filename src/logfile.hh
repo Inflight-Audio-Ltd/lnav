@@ -132,6 +132,11 @@ public:
         return this->lf_filename;
     }
 
+    const std::string get_filename_as_string() const
+    {
+        return this->lf_filename_as_string;
+    }
+
     std::filesystem::path get_path_for_key() const
     {
         return this->lf_actual_path.value_or(this->lf_filename);
@@ -198,10 +203,7 @@ public:
 
     int get_time_offset_line() const { return this->lf_time_offset_line; }
 
-    const timeval& get_time_offset() const
-    {
-        return this->lf_time_offset;
-    }
+    const timeval& get_time_offset() const { return this->lf_time_offset; }
 
     void adjust_content_time(int line,
                              const struct timeval& tv,
@@ -272,7 +274,8 @@ public:
 
     struct timeval original_line_time(iterator ll);
 
-    Result<shared_buffer_ref, std::string> read_line(iterator ll);
+    Result<shared_buffer_ref, std::string> read_line(iterator ll,
+                                                     subline_options opts = {});
 
     enum class read_format_t {
         plain,
@@ -420,6 +423,10 @@ public:
 
     safe_opid_state& get_opids() { return this->lf_opids; }
 
+    using safe_thread_id_state = safe::Safe<log_thread_id_state>;
+
+    safe_thread_id_state& get_thread_ids() { return this->lf_thread_ids; }
+
     void set_logline_opid(uint32_t line_number, string_fragment opid);
 
     void clear_logline_opid(uint32_t line_number);
@@ -452,12 +459,14 @@ public:
         return this->lf_file_options;
     }
 
-    const std::set<intern_string_t>& get_mismatched_formats()
+    const robin_hood::unordered_set<intern_string_t, intern_hasher>&
+    get_mismatched_formats() const
     {
         return this->lf_mismatched_formats;
     }
 
     const std::vector<lnav::console::user_message>& get_format_match_messages()
+        const
     {
         return this->lf_format_match_messages;
     }
@@ -501,6 +510,7 @@ private:
     bool file_options_have_changed();
 
     std::filesystem::path lf_filename;
+    std::string lf_filename_as_string;
     logfile_open_options lf_options;
     logfile_activity lf_activity;
     bool lf_named_file{true};
@@ -534,13 +544,15 @@ private:
     uint32_t lf_out_of_time_order_count{0};
     safe_notes lf_notes;
     safe_opid_state lf_opids;
+    safe_thread_id_state lf_thread_ids;
     size_t lf_watch_count{0};
     ArenaAlloc::Alloc<char> lf_allocator{64 * 1024};
     std::optional<time_t> lf_cached_base_time;
     std::optional<tm> lf_cached_base_tm;
 
     std::optional<std::pair<file_off_t, size_t>> lf_next_line_cache;
-    std::set<intern_string_t> lf_mismatched_formats;
+    robin_hood::unordered_set<intern_string_t, intern_hasher>
+        lf_mismatched_formats;
     robin_hood::unordered_map<uint32_t, bookmark_metadata> lf_bookmark_metadata;
 
     std::vector<std::shared_ptr<format_tag_def>> lf_applicable_taggers;

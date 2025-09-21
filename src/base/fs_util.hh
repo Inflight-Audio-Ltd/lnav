@@ -60,13 +60,32 @@ is_glob(const std::string& fn)
             || fn.find('[') != std::string::npos);
 }
 
+std::string escape_glob_for_win(std::string arg);
+
+bool is_url(const std::string& fn);
+
 enum class path_type {
     normal,
     pattern,
+    windows,
+    remote,
+    url,
 };
 
 std::string escape_path(const std::filesystem::path& p,
                         path_type pt = path_type::normal);
+
+path_type determine_path_type(const std::string& arg);
+
+struct path_transcoder {
+    static path_transcoder from(std::string arg);
+
+    std::filesystem::path pt_path;
+    std::optional<bool> pt_root_name_capitalized;
+
+    std::string to_native(std::string arg);
+    static std::string to_shell_arg(std::string arg);
+};
 
 std::pair<std::string, file_location_t> split_file_location(
     const std::string& path);

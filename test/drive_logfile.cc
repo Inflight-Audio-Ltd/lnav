@@ -39,6 +39,7 @@
 
 #include "base/injector.bind.hh"
 #include "base/injector.hh"
+#include "base/isc.hh"
 #include "base/opt_util.hh"
 #include "config.h"
 #include "log_format.hh"
@@ -118,6 +119,7 @@ main(int argc, char* argv[])
     } else if (argc == 0) {
         fprintf(stderr, "error: expecting log file name\n");
     } else {
+        isc::supervisor root_superv(injector::get<isc::service_list>());
         logfile_open_options default_loo;
         auto open_res = logfile::open(argv[0], default_loo);
 
@@ -189,9 +191,11 @@ main(int argc, char* argv[])
                 break;
             case MODE_LEVELS:
                 for (auto& iter : *lf) {
-                    log_level_t level = iter.get_level_and_flags();
-                    printf("%s 0x%x\n",
-                           level_names[level & ~LEVEL__FLAGS],
+                    auto level = iter.get_level_and_flags();
+                    auto level_sf = level_names[level & ~LEVEL__FLAGS];
+                    printf("%.*s 0x%x\n",
+                           level_sf.length(),
+                           level_sf.data(),
                            level & LEVEL__FLAGS);
                 }
                 break;

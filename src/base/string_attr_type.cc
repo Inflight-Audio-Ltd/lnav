@@ -33,6 +33,10 @@
 
 constexpr string_attr_type<void> SA_ORIGINAL_LINE("original_line");
 constexpr string_attr_type<void> SA_BODY("body");
+constexpr string_attr_type<void> SA_SRC_FILE("src-file");
+constexpr string_attr_type<void> SA_SRC_LINE("src-line");
+constexpr string_attr_type<void> SA_THREAD_ID("thread-id");
+constexpr string_attr_type<void> SA_EXTRA_CONTENT("extra-content");
 constexpr string_attr_type<ui_icon_t> SA_HIDDEN("hidden");
 constexpr string_attr_type<void> SA_REPLACED("replaced");
 constexpr string_attr_type<intern_string_t> SA_FORMAT("format");
@@ -44,6 +48,7 @@ constexpr string_attr_type<int64_t> SA_LEVEL("level");
 constexpr string_attr_type<int64_t> SA_ORIGIN_OFFSET("origin-offset");
 constexpr string_attr_type<text_format_t> SA_QUOTED_TEXT("quoted-text");
 
+constexpr string_attr_type<std::string> VC_ANCHOR("anchor");
 constexpr string_attr_type<role_t> VC_ROLE("role");
 constexpr string_attr_type<role_t> VC_ROLE_FG("role-fg");
 constexpr string_attr_type<text_attrs> VC_STYLE("style");

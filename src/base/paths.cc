@@ -27,28 +27,28 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
+#include <filesystem>
 
 #ifdef __CYGWIN__
-#    include <algorithm>
-#    include <iostream>
-#    include <sstream>
+#include <algorithm>
 #endif
 
 #include <unistd.h>
 
+#include "config.h"
 #include "fmt/format.h"
+#include "lnav_log.hh"
+#include "opt_util.hh"
 #include "paths.hh"
 
 namespace lnav::paths {
 
 #ifdef __CYGWIN__
-char*
-windows_to_unix_file_path(char* input)
+std::string
+windows_to_unix_file_path(const std::string& input)
 {
-    if (input == nullptr) {
-        return nullptr;
-    }
+    static const auto CYGDRIVE = std::filesystem::path("/cygdrive");
+
     std::string file_path;
     file_path.assign(input);
 
@@ -70,25 +70,28 @@ windows_to_unix_file_path(char* input)
     const auto remaining_path = file_path.substr(2, file_path.size() - 2);
     file_path = drive_letter + remaining_path;
 
-    std::stringstream stringstream;
-    stringstream << "/cygdrive/";
-    stringstream << file_path;
-
-    return const_cast<char*>(stringstream.str().c_str());
+    return (CYGDRIVE / file_path).string();
 }
 #endif
 
 std::filesystem::path
 dotlnav()
 {
-#ifdef __CYGWIN__
-    auto home_env = windows_to_unix_file_path(getenv("APPDATA"));
-#else
-    auto home_env = getenv("HOME");
-#endif
-    auto xdg_config_home = getenv("XDG_CONFIG_HOME");
+    auto home_env = std::string(getenv_opt("HOME").value_or(""));
+    const auto* xdg_config_home = getenv("XDG_CONFIG_HOME");
 
-    if (home_env != nullptr) {
+#ifdef __CYGWIN__
+    const auto* app_data = getenv("APPDATA");
+    if (app_data != nullptr) {
+        auto app_data_path = std::filesystem::path(windows_to_unix_file_path(app_data));
+
+        if (std::filesystem::is_directory(app_data_path)) {
+            return app_data_path / "lnav";
+        }
+    }
+#endif
+
+    if (!home_env.empty()) {
         auto home_path = std::filesystem::path(home_env);
 
         if (std::filesystem::is_directory(home_path)) {

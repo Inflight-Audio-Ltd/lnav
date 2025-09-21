@@ -15,9 +15,9 @@ AM_CFLAGS = $(CODE_COVERAGE_CFLAGS)
 AM_CXXFLAGS = $(CODE_COVERAGE_CXXFLAGS)
 
 if HAVE_CARGO
-RUST_DEPS_CPPFLAGS = -I$(top_srcdir)/src/third-party/prqlc-c -DHAVE_RUST_DEPS=1
-PRQLC_DIR = ../src/third-party/prqlc-c/target
-RUST_DEPS_LIBS = $(PRQLC_DIR)/release/libprqlc_c.a
+RUST_DEPS_CPPFLAGS = -I$(top_srcdir)/src/third-party/lnav-rs-ext -DHAVE_RUST_DEPS=1
+PRQLC_DIR = ../src/third-party/lnav-rs-ext/target
+RUST_DEPS_LIBS = $(PRQLC_DIR)/release/liblnav_rs_ext.a
 else
 RUST_DEPS =
 RUST_DEPS_CPPFLAGS =
@@ -200,6 +200,7 @@ scripty_SOURCES = scripty.cc
 
 dist_noinst_SCRIPTS = \
 	parser_debugger.py \
+	test_breakpoints.sh \
 	test_cli.sh \
 	test_cmds.sh \
 	test_config.sh \
@@ -366,16 +367,24 @@ dist_noinst_DATA = \
 	logfile_json3.json \
 	logfile_json_invalid.json \
 	logfile_json_subsec.json \
+	logfile_laravel.0 \
+	logfile_laravel.1 \
 	logfile_leveltest.0 \
 	logfile_logfmt.0 \
 	logfile_multiline.0 \
 	logfile_muxed_syslog.0 \
+	logfile_mysql_error.0 \
+	logfile_mysql_gen.0 \
+	logfile_mysql_slow.0 \
 	logfile_nested_json.json \
 	logfile_nextcloud.0 \
 	logfile_openam.0 \
 	logfile_partitions.0 \
 	logfile_pino.0 \
 	logfile_plain.0 \
+	logfile_postgres.0 \
+	logfile_postgres.1 \
+	logfile_postgres.2 \
 	logfile_pretty.0 \
 	logfile_procstate.0 \
 	logfile_regexp_access_log.0 \
@@ -501,6 +510,7 @@ TESTS = \
 	test_date_time_scanner \
 	test_format_installer.sh \
 	test_format_loader.sh \
+	test_breakpoints.sh \
 	test_cli.sh \
 	test_cmds.sh \
 	test_config.sh \

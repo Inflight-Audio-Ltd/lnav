@@ -66,7 +66,7 @@ you the basics of operation:
 
 [1m## Installation[0m
 
-[34m[[0mDownload a statically-linked binary for Linux/MacOS from the release page[34m]([0mhttps://github.com/tstack/lnav/releases/latest#release-artifacts[34m)[0m
+[34m[[0mDownload a statically-linked binary for Linux/MacOS/Windows from the release page[34m]([0mhttps://github.com/tstack/lnav/releases/latest#release-artifacts[34m)[0m
 
 [4m### Brew on MacOS[0m
 
@@ -176,7 +176,6 @@ The following software packages are required to build lnav:
 [33m-[0m gcc/clang    - A C++14-compatible compiler.
 [33m-[0m libpcre2     - The Perl Compatible Regular Expression v2 (PCRE2) library.
 [33m-[0m sqlite       - The SQLite database engine.  Version 3.9.0 or higher is required.
-[33m-[0m ncurses      - The ncurses text UI library.
 [33m-[0m zlib         - The zlib compression library.
 [33m-[0m bz2          - The bzip2 compression library.
 [33m-[0m libcurl      - The cURL library for downloading files from URLs.  Version 7.23.0 or higher is required.
@@ -201,3 +200,12 @@ Run [35m`./autogen.sh`[0m if compiling from a cloned repository.
 
 [34m[[0mAngle-grinder[34m]([0mhttps://github.com/rcoh/angle-grinder[34m)[0m is a tool to slice and dice log files on the command-line.
 If you're familiar with the SumoLogic query language, you might find this tool more comfortable to work with.
+
+[1m## Code Signing Policy[0m
+
+Free code signing provided by [34m[[0mSignPath.io[34m]([0mhttps://about.signpath.io/[34m)[0m,
+certificate by [34m[[0mSignPath Foundation[34m]([0mhttps://signpath.org/[34m)[0m.
+
+This program will not transfer any information to other networked systems
+unless specifically requested by the user or the person installing or
+operating it.

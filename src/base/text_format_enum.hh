@@ -54,6 +54,8 @@ enum class text_format_t : uint8_t {
     TF_SHELL_SCRIPT,
     TF_LNAV_SCRIPT,
     TF_RESTRUCTURED_TEXT,
+    TF_INI,
+    TF_CSV,
     TF_UNKNOWN,
 };
 

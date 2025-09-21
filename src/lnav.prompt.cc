@@ -50,6 +50,7 @@
 #include "log_data_table.hh"
 #include "log_format_ext.hh"
 #include "log_search_table.hh"
+#include "logline_window.hh"
 #include "readline_highlighters.hh"
 #include "readline_possibilities.hh"
 #include "scn/scan.h"
@@ -59,6 +60,7 @@
 #include "sql.formatter.hh"
 #include "sql_help.hh"
 #include "sql_util.hh"
+#include "sqlitepp.client.hh"
 #include "tailer/tailer.looper.hh"
 #include "yajlpp/yajlpp_def.hh"
 
@@ -268,12 +270,14 @@ prompt::refresh_sql_expr_completions(textview_curses& tc)
         if (attr_opt) {
             auto format_name = attr_opt->get();
             auto format = log_format::find_root_format(format_name.c_str());
-            for (const auto& lvm : format->get_value_metadata()) {
-                auto var_name
-                    = fmt::format(FMT_STRING(":{}"), lvm.lvm_name.c_str());
-                this->insert_sql_completion(var_name, sql_field_var_t{});
-                this->insert_sql_completion(lvm.lvm_name.to_string(),
-                                            sql_format_column_t{});
+            if (format) {
+                for (const auto& lvm : format->get_value_metadata()) {
+                    auto var_name
+                        = fmt::format(FMT_STRING(":{}"), lvm.lvm_name.c_str());
+                    this->insert_sql_completion(var_name, sql_field_var_t{});
+                    this->insert_sql_completion(lvm.lvm_name.to_string(),
+                                                sql_format_column_t{});
+                }
             }
         }
         return std::nullopt;
@@ -435,7 +439,7 @@ prompt::rl_reformat(textinput_curses& tc)
     switch (tc.tc_prefix.al_string.front()) {
         case ';': {
             auto content = attr_line_t(tc.get_content());
-            annotate_sql_statement(content);
+            annotate_sql_statement(content, lnav::sql::dialect::sqlite);
             auto format_res = lnav::db::format(content, tc.get_cursor_offset());
             tc.set_content(format_res.fr_content);
             if (tc.tc_height == 1) {
@@ -491,7 +495,8 @@ prompt::rl_history(textinput_curses& tc)
                 al.al_attrs.emplace_back(line_range{0, 1}, VC_ICON.value(icon));
                 break;
             case ';':
-                readline_sqlite_highlighter(al, std::nullopt);
+                readline_sql_highlighter(
+                    al, lnav::sql::dialect::sqlite, std::nullopt);
                 al.insert(0, "  ");
                 al.al_attrs.emplace_back(line_range{0, 1}, VC_ICON.value(icon));
                 break;
@@ -849,6 +854,12 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
                                      const help_text* ht,
                                      const std::string& str)
 {
+    static const auto KNOWN_BREAKPOINT_STMT = R"(
+    SELECT description
+      FROM lnav_log_breakpoints
+     WHERE instr(description, ':#:') = 0
+)";
+
     std::vector<attr_line_t> retval;
 
     if (cmd_ht == ht) {
@@ -970,6 +981,7 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
                     return this->get_env_completion(str);
                 }
 
+                auto str_as_path = lnav::filesystem::path_transcoder::from(str);
                 std::set<std::string> poss_paths;
 
                 auto rp_opt = humanize::network::path::from_str(str);
@@ -996,8 +1008,7 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
                         poss_paths.emplace(poss_rpath);
                     }
                 } else {
-                    auto str_as_path = std::filesystem::path{str};
-                    auto parent = str_as_path.parent_path();
+                    auto parent = str_as_path.pt_path.parent_path();
                     std::error_code ec;
 
                     log_trace("not a remote path: %s", str.c_str());
@@ -1013,38 +1024,52 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
                     if (parent.empty()) {
                         parent = ".";
                     }
-                    log_trace("completing directory: %s", parent.c_str());
-                    for (const auto& entry :
-                         std::filesystem::directory_iterator(parent, ec))
+                    if (!parent.has_root_name()
+                        || !parent.root_directory().empty())
                     {
-                        auto path_str = entry.path().string();
-                        if (entry.is_directory()) {
-                            path_str.push_back('/');
-                        } else if (ht->ht_format
-                                   == help_parameter_format_t::HPF_DIRECTORY)
+                        log_trace("completing directory: %s", parent.c_str());
+                        for (const auto& entry :
+                             std::filesystem::directory_iterator(parent, ec))
                         {
-                            continue;
+                            auto path_str = entry.path().string();
+                            log_debug("  entry: %s", path_str.c_str());
+                            if (entry.is_directory()) {
+                                path_str.push_back('/');
+                            } else if (ht->ht_format
+                                       == help_parameter_format_t::
+                                           HPF_DIRECTORY)
+                            {
+                                continue;
+                            }
+                            path_str = str_as_path.to_native(path_str);
+                            poss_paths.emplace(std::move(path_str));
                         }
-                        poss_paths.emplace(std::move(path_str));
-                    }
-                    if (ht->ht_format == help_parameter_format_t::HPF_DIRECTORY
-                        && !ec)
-                    {
-                        poss_paths.emplace(parent.string() + "/");
+                        if (ht->ht_format
+                                == help_parameter_format_t::HPF_DIRECTORY
+                            && !ec)
+                        {
+                            auto path_str = parent.string();
+                            path_str.push_back('/');
+                            path_str = str_as_path.to_native(path_str);
+                            poss_paths.emplace(path_str);
+                        }
                     }
                 }
 
-                retval = poss_paths | lnav::itertools::similar_to(str, 10)
-                    | lnav::itertools::map([&str](const auto& path_str) {
-                             auto escaped_path = shlex::escape(path_str);
-                             if (!endswith(path_str, "/") || path_str == str) {
-                                 escaped_path.push_back(' ');
-                             }
-                             return attr_line_t()
-                                 .append(path_str)
-                                 .with_attr_for_all(
-                                     SUBST_TEXT.value(escaped_path));
-                         });
+                retval
+                    = poss_paths | lnav::itertools::similar_to(str, 10)
+                    | lnav::itertools::map([&str](const std::string& path_str) {
+                          auto escaped_path = shlex::escape(path_str);
+                          if (path_str.find_last_of("/\\") == std::string::npos
+                              || path_str == str)
+                          {
+                              escaped_path.push_back(' ');
+                          }
+                          return attr_line_t()
+                              .append(path_str)
+                              .with_attr_for_all(
+                                  SUBST_TEXT.value(escaped_path));
+                      });
                 break;
             }
             case help_parameter_format_t::HPF_LOADED_FILE: {
@@ -1081,9 +1106,13 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
                             auto format_name = attr_opt->get();
                             auto format = log_format::find_root_format(
                                 format_name.c_str());
-                            for (const auto& lvm : format->get_value_metadata())
-                            {
-                                field_names.emplace(lvm.lvm_name.to_string());
+                            if (format) {
+                                for (const auto& lvm :
+                                     format->get_value_metadata())
+                                {
+                                    field_names.emplace(
+                                        lvm.lvm_name.to_string());
+                                }
                             }
                         }
                         return std::nullopt;
@@ -1123,11 +1152,14 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
                             auto format_name = attr_opt->get();
                             auto format = log_format::find_root_format(
                                 format_name.c_str());
-                            for (const auto& lvm : format->get_value_metadata())
-                            {
-                                if (lvm.is_numeric()) {
-                                    field_names.emplace(
-                                        lvm.lvm_name.to_string());
+                            if (format) {
+                                for (const auto& lvm :
+                                     format->get_value_metadata())
+                                {
+                                    if (lvm.is_numeric()) {
+                                        field_names.emplace(
+                                            lvm.lvm_name.to_string());
+                                    }
                                 }
                             }
                         }
@@ -1299,6 +1331,51 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
                          });
                 break;
             }
+            case help_parameter_format_t::HPF_BREAKPOINT: {
+                auto* lss
+                    = dynamic_cast<logfile_sub_source*>(tc.get_sub_source());
+
+                if (lss == nullptr) {
+                    return {};
+                }
+                std::set<std::string> poss_strs;
+
+                auto win = lss->window_at(tc.get_top(), tc.get_bottom());
+                for (const auto& msg : *win) {
+                    auto format_name = msg.get_file_ptr()->get_format_name();
+                    auto src_file_sf = msg.get_string_for_attr(SA_SRC_FILE);
+                    auto src_line_sf = msg.get_string_for_attr(SA_SRC_LINE);
+                    if (src_file_sf && src_line_sf) {
+                        poss_strs.emplace(fmt::format(FMT_STRING("{}:{}:{}"),
+                                                      format_name,
+                                                      src_file_sf.value(),
+                                                      src_line_sf.value()));
+                    }
+                }
+                retval = poss_strs | lnav::itertools::similar_to(str, 10)
+                    | lnav::itertools::map([](const auto& x) {
+                             return attr_line_t().append(x).with_attr_for_all(
+                                 SUBST_TEXT.value(x + " "));
+                         });
+                break;
+            }
+            case help_parameter_format_t::HPF_KNOWN_BREAKPOINT: {
+                auto prep_res
+                    = prepare_stmt(lnav_data.ld_db.in(), KNOWN_BREAKPOINT_STMT);
+                std::vector<std::string> poss_strs;
+                auto stmt = prep_res.unwrap();
+                auto loop_res = stmt.for_each_row<std::string>(
+                    [&poss_strs](const std::string& desc) {
+                        poss_strs.emplace_back(desc);
+                        return false;
+                });
+                retval = poss_strs | lnav::itertools::similar_to(str, 10)
+                    | lnav::itertools::map([](const auto& x) {
+                             return attr_line_t().append(x).with_attr_for_all(
+                                 SUBST_TEXT.value(x + " "));
+                         });
+                break;
+            }
             case help_parameter_format_t::HPF_ADJUSTED_TIME: {
                 static const auto symbolic_times = std::vector<std::string>{
                     "-1h",
@@ -1422,8 +1499,8 @@ prompt::get_cmd_parameter_completion(textview_curses& tc,
     } else {
         retval = ht->ht_enum_values | lnav::itertools::similar_to(str, 10)
             | lnav::itertools::map([](const auto& x) {
-                     return attr_line_t(x).with_attr_for_all(
-                         SUBST_TEXT.value(std::string(x) + " "));
+                     return attr_line_t().append(x).with_attr_for_all(
+                         SUBST_TEXT.value(fmt::format(FMT_STRING("{} "), x)));
                  });
     }
 
@@ -1446,10 +1523,10 @@ prompt::get_config_value_completion(const std::string& path,
     if (jph.jph_bool_cb) {
         poss_strs = {"true", "false"};
     } else if (jph.jph_enum_values != nullptr) {
-        for (auto lpc = size_t{0}; jph.jph_enum_values[lpc].first != nullptr;
+        for (auto lpc = size_t{0}; !jph.jph_enum_values[lpc].first.empty();
              lpc++)
         {
-            poss_strs.emplace_back(jph.jph_enum_values[lpc].first);
+            poss_strs.emplace_back(jph.jph_enum_values[lpc].first.to_string());
         }
     } else if (jph.jph_synopsis != nullptr) {
         const auto syno_iter = this->p_config_values.find(jph.jph_synopsis);
@@ -1478,10 +1555,10 @@ prompt::rl_external_edit(textinput_curses& tc)
 #   |saved-prompt
 #
 # If you want to save this script for future use, save it with another name
-# since this file will be overwritten the next time a prompt is tranferred.
+# since this file will be overwritten the next time a prompt is transferred.
 #
 
-)";
+)"_frag;
 
     auto content = fmt::format(
         FMT_STRING("{}{}{}"), HEADER, tc.tc_prefix.al_string, tc.get_content());
@@ -1506,7 +1583,8 @@ prompt::rl_external_edit(textinput_curses& tc)
 
     tc.abort();
 
-    auto open_res = lnav::external_editor::open(dst);
+    auto line = HEADER.count('\n') + tc.tc_cursor.y + 1;
+    auto open_res = lnav::external_editor::open(dst, line, tc.tc_cursor.x);
     if (open_res.isErr()) {
         auto errmsg = open_res.unwrapErr();
         auto um = lnav::console::user_message::info(

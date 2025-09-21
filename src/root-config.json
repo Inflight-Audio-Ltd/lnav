@@ -27,6 +27,11 @@
                 "description": "Convert a vmacore backtrace into human-readable text",
                 "condition": ":log_body LIKE '%[context]%[/context]%'",
                 "handler": "com.vmware.btresolver.py"
+            },
+            "org.postgresql.statement-error": {
+                "description": "statement error",
+                "condition": ":log_level COLLATE loglevel >= 'error' AND :log_body LIKE '% at character %' AND :log_format IN ('postgres_log', 'vpostgres_log')",
+                "handler": "|pg-annotate-errors"
             }
         },
         "demux": {
@@ -135,13 +140,26 @@
         },
         "external-editor": {
             "impls": {
+                "CLion": {
+                    "config-dir": ".idea",
+                    "test": "command -v clion",
+                    "command": "clion --line ${LINE} --column ${COL} \"$FILE_PATH\""
+                },
+                "RustRover": {
+                    "config-dir": ".idea",
+                    "prefers": "^.*(?:Cargo.toml|\\.rs)",
+                    "test": "command -v rustrover",
+                    "command": "rustrover --line ${LINE} --column ${COL} \"$FILE_PATH\""
+                },
                 "VSCode": {
+                    "config-dir": ".vscode",
                     "test": "command -v code",
-                    "command": "env VSCODE_PWD=\"$PWD\" code \"$FILE_PATH\""
+                    "command": "env VSCODE_PWD=\"$PWD\" code -g \"$FILE_PATH\":$LINE:$COL"
                 },
                 "VSCode.app": {
+                    "config-dir": ".vscode",
                     "test": "command -v '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'",
-                    "command": "env VSCODE_PWD=\"$PWD\" '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code' \"$FILE_PATH\""
+                    "command": "env VSCODE_PWD=\"$PWD\" '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code' -g \"$FILE_PATH\":$LINE:$COL"
                 },
                 "zzz.MacOS": {
                     "test": "command -v open",

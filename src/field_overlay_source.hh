@@ -42,8 +42,7 @@
 
 class field_overlay_source : public text_overlay_menu {
 public:
-    explicit field_overlay_source(logfile_sub_source& lss,
-                                  text_sub_source& tss)
+    explicit field_overlay_source(logfile_sub_source& lss, text_sub_source& tss)
         : fos_lss(lss), fos_tss(tss), fos_log_helper(lss)
     {
     }
@@ -109,6 +108,8 @@ public:
     log_data_helper fos_log_helper;
     int fos_known_key_size{0};
     int fos_unknown_key_size{0};
+    std::vector<attr_line_t> fos_static_lines;
+    hasher::array_t fos_static_lines_state;
     std::vector<attr_line_t> fos_lines;
     std::vector<attr_line_t> fos_meta_lines;
 

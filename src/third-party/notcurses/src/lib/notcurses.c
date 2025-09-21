@@ -21,6 +21,8 @@
 #define ESC "\x1b"
 #define TABSTOP 8
 
+Terminfo* notcurses_terminfo;
+
 void notcurses_version_components(int* major, int* minor, int* patch, int* tweak){
   *major = NOTCURSES_VERNUM_MAJOR;
   *minor = NOTCURSES_VERNUM_MINOR;
@@ -103,7 +105,9 @@ int reset_term_palette(const tinfo* ti, fbuf* f, unsigned touchedpalette){
       r = r * 1000 / 255;
       g = g * 1000 / 255;
       b = b * 1000 / 255;
-      if(fbuf_emit(f, tiparm(esc, z, r, g, b)) < 0){
+      TiparmValue argv[] = {tiparm_int(z), tiparm_int(r), tiparm_int(g), tiparm_int(b),};
+
+      if(fbuf_emit_parm(f, tiparm_s(esc, 4, argv)) < 0){
         return -1;
       }
     }
@@ -1467,8 +1471,9 @@ err:
     (void)tcsetattr(ret->tcache.ttyfd, TCSAFLUSH, ret->tcache.tpreserved);
     free(ret->tcache.tpreserved);
   }
-  drop_signals(ret);
-  del_curterm(cur_term);
+    drop_signals(ret);
+    terminfo_free(notcurses_terminfo);
+    notcurses_terminfo = NULL;
   pthread_mutex_destroy(&ret->stats.lock);
   pthread_mutex_destroy(&ret->pilelock);
   free(ret);
@@ -1544,7 +1549,8 @@ int notcurses_stop(notcurses* nc){
       summarize_stats(nc);
     }
 #ifndef __MINGW32__
-    del_curterm(cur_term);
+    terminfo_free(notcurses_terminfo);
+    notcurses_terminfo = NULL;
 #endif
     ret |= pthread_mutex_destroy(&nc->stats.lock);
     ret |= pthread_mutex_destroy(&nc->pilelock);
@@ -2070,6 +2076,21 @@ int ncplane_putegc_yx(ncplane* n, int y, int x, const char* gclust, size_t* sbyt
   }
 //fprintf(stderr, "glust: %s cols: %d wcs: %d\n", gclust, cols, bytes);
   return ncplane_put(n, y, x, gclust, cols, n->stylemask, n->channels, bytes);
+}
+
+int
+ncplane_pututf32_yx(struct ncplane* n, int y, int x, uint32_t u){
+    // we use MB_LEN_MAX (and potentially "waste" a few stack bytes to avoid
+    // the greater sin of a VLA (and to be locale-independent).
+    unsigned char utf8c[MB_LEN_MAX + 1];
+    // this isn't going to be valid for reconstructued surrogate pairs...
+    // we need our own, or to use unistring or something.
+    size_t s = u8_uctomb(utf8c, u, sizeof(utf8c));
+    if(s == (size_t)-1){
+        return -1;
+    }
+    utf8c[s] = '\0';
+    return ncplane_putegc_yx(n, y, x, (const char *) utf8c, NULL);
 }
 
 int ncplane_putchar_stained(ncplane* n, char c){
