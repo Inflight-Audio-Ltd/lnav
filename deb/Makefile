@@ -29,10 +29,13 @@ MAN = $(NAME)/usr/share/man/man1/lnav.1.gz
 build: $(PKG)
 	@echo "==> $(PKG) has been built successfully"
 
+../src/lnav: ;
+../src/help.md: ;
+../lnav.1: ;
 
 $(BIN): $(SRC)
 	@mkdir -p $(@D)
-	cp $? $@
+	cp $< $@
 	strip -s $@
 
 $(HLP): ../src/help.md
